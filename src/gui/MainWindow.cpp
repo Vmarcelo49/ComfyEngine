@@ -33,9 +33,6 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QInputDialog>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
 #include <QToolBar>
 #include <QProcess>
 #include <QCoreApplication>
@@ -82,7 +79,11 @@
 #include "gui/ValueMonitorDialog.h"
 #include "gui/WatchWindow.h"
 #include "gui/AobInjectionDialog.h"
+#include "core/Analysis.h"
+#include "core/AutoAssembler.h"
+#include "core/CheatTable.h"
 #include "core/DebugWatch.h"
+#include "core/ScalarCodec.h"
 
 #include <sstream>
 #include <cmath>
@@ -110,88 +111,21 @@ std::vector<uint8_t> parseHexBytes(const QString &s) {
     return out;
 }
 
-QString typeToString(core::ValueType t) {
-    switch (t) {
-        case core::ValueType::Byte: return "Byte";
-        case core::ValueType::Int16: return "2 Bytes";
-        case core::ValueType::Int32: return "4 Bytes";
-        case core::ValueType::Int64: return "8 Bytes";
-        case core::ValueType::Float: return "Float";
-        case core::ValueType::Double: return "Double";
-        case core::ValueType::ArrayOfByte: return "AOB";
-        case core::ValueType::String: return "String";
-    }
-    return "Unknown";
+QString typeName(core::ValueType t) {
+    return QString::fromLatin1(core::typeToString(t));
 }
 
-template <typename T>
-T unpackRaw(uint64_t raw) {
-    T value{};
-    std::memcpy(&value, &raw, sizeof(T));
-    return value;
-}
-
-QString formatRawValue(uint64_t raw, core::ValueType t) {
-    switch (t) {
-        case core::ValueType::Byte:
-            return QString::number(unpackRaw<int8_t>(raw));
-        case core::ValueType::Int16:
-            return QString::number(unpackRaw<int16_t>(raw));
-        case core::ValueType::Int32:
-            return QString::number(unpackRaw<int32_t>(raw));
-        case core::ValueType::Int64:
-            return QString::number(unpackRaw<int64_t>(raw));
-        case core::ValueType::Float:
-            return QString::number(unpackRaw<float>(raw), 'g', 6);
-        case core::ValueType::Double:
-            return QString::number(unpackRaw<double>(raw), 'g', 12);
-        case core::ValueType::ArrayOfByte:
-        case core::ValueType::String:
-            return QString();
-    }
-    return QString();
+QString formatRaw(uint64_t raw, core::ValueType t) {
+    return QString::fromStdString(core::formatRawValue(raw, t));
 }
 
 QString formatValue(const QByteArray &data, core::ValueType t) {
-    if (data.isEmpty()) return "";
-    switch (t) {
-        case core::ValueType::Byte:
-            if (data.size() == static_cast<int>(sizeof(int8_t))) { int8_t v; std::memcpy(&v, data.data(), sizeof(v)); return QString::number(v); }
-            break;
-        case core::ValueType::Int16:
-            if (data.size() == static_cast<int>(sizeof(int16_t))) { int16_t v; std::memcpy(&v, data.data(), sizeof(v)); return QString::number(v); }
-            break;
-        case core::ValueType::Int32:
-            if (data.size() == static_cast<int>(sizeof(int32_t))) { int32_t v; std::memcpy(&v, data.data(), sizeof(v)); return QString::number(v); }
-            break;
-        case core::ValueType::Int64:
-            if (data.size() == static_cast<int>(sizeof(int64_t))) { int64_t v; std::memcpy(&v, data.data(), sizeof(v)); return QString::number(v); }
-            break;
-        case core::ValueType::Float:
-            if (data.size() == static_cast<int>(sizeof(float))) { float v; std::memcpy(&v, data.data(), sizeof(v)); return QString::number(v, 'g', 6); }
-            break;
-        case core::ValueType::Double:
-            if (data.size() == static_cast<int>(sizeof(double))) { double v; std::memcpy(&v, data.data(), sizeof(v)); return QString::number(v, 'g', 12); }
-            break;
-        case core::ValueType::ArrayOfByte:
-            return QString::fromLatin1(data.toHex(' '));
-        case core::ValueType::String:
-            return QString::fromLatin1(data);
-    }
-    return "";
+    return QString::fromStdString(core::formatValueBytes(reinterpret_cast<const uint8_t *>(data.constData()),
+                                                         static_cast<size_t>(data.size()), t));
 }
 
 QString ptraceHint() {
-    std::ifstream f("/proc/sys/kernel/yama/ptrace_scope");
-    int scope = -1;
-    if (f.good()) {
-        f >> scope;
-    }
-    if (scope > 0) {
-        return QString("\nHint: ptrace_scope=%1; try 'echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope' or run as root.")
-            .arg(scope);
-    }
-    return QString();
+    return QString::fromStdString(core::ptraceHint());
 }
 
 }
@@ -1109,7 +1043,7 @@ void MainWindow::setupUi() {
                 }
                 auto openMemoryViewerAt = [this](uintptr_t address) {
                     if (!memoryViewer_ || !target_ || !target_->isAttached()) return;
-                    memoryViewer_->setTarget(target_.get(), address);
+                    memoryViewer_->setTarget(target_.get(), address, injector_.get());
                     showDock(memoryViewerDock_);
                 };
                 if (chosen == browseAct || chosen == disasmAct) {
@@ -1284,7 +1218,7 @@ void MainWindow::setupUi() {
                     win->show();
                 } else if (chosen == browseAct) {
                     if (memoryViewer_ && target_ && target_->isAttached()) {
-                        memoryViewer_->setTarget(target_.get(), w.address);
+                        memoryViewer_->setTarget(target_.get(), w.address, injector_.get());
                         showDock(memoryViewerDock_);
                     }
                 } else if (chosen == trackAct) {
@@ -1825,7 +1759,7 @@ void MainWindow::populateWatchList(bool force) {
             typeItem = new QTableWidgetItem;
             watchTable_->setItem(i, 3, typeItem);
         }
-        typeItem->setText(w.isScript ? QStringLiteral("Script") : typeToString(w.type));
+        typeItem->setText(w.isScript ? QStringLiteral("Script") : typeName(w.type));
 
         QTableWidgetItem *valItem = watchTable_->item(i, 4);
         if (!valItem) {
@@ -1873,30 +1807,11 @@ void MainWindow::refreshWatchValues(bool force) {
         }
 
         QByteArray current;
-        bool ok = true;
-        switch (w.type) {
-            case core::ValueType::Byte: {
-                int8_t v = 0; ok = target_->readMemory(effectiveAddr, &v, sizeof(v)); if (ok) current = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-            }
-            case core::ValueType::Int16: {
-                int16_t v = 0; ok = target_->readMemory(effectiveAddr, &v, sizeof(v)); if (ok) current = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-            }
-            case core::ValueType::Int32: {
-                int32_t v = 0; ok = target_->readMemory(effectiveAddr, &v, sizeof(v)); if (ok) current = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-            }
-            case core::ValueType::Int64: {
-                int64_t v = 0; ok = target_->readMemory(effectiveAddr, &v, sizeof(v)); if (ok) current = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-            }
-            case core::ValueType::Float: {
-                float v = 0; ok = target_->readMemory(effectiveAddr, &v, sizeof(v)); if (ok) current = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-            }
-            case core::ValueType::Double: {
-                double v = 0; ok = target_->readMemory(effectiveAddr, &v, sizeof(v)); if (ok) current = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-            }
-            case core::ValueType::ArrayOfByte:
-            case core::ValueType::String:
-                ok = false;
-                break;
+        bool ok = false;
+        std::vector<uint8_t> scalar;
+        if (core::readScalar(*target_, effectiveAddr, w.type, scalar)) {
+            ok = true;
+            current = QByteArray(reinterpret_cast<const char *>(scalar.data()), static_cast<int>(scalar.size()));
         }
         auto *valItem = watchTable_->item(i, 4);
         if (!ok) {
@@ -1935,59 +1850,14 @@ void MainWindow::onModifyValue() {
     int row = idx.row();
     if (row < 0 || row >= static_cast<int>(watches_.size())) return;
     auto &w = watches_[row];
-    uintptr_t addr = w.address;
-    auto type = w.type;
-    bool ok = false;
-    QByteArray bytes;
-    switch (type) {
-        case core::ValueType::Byte: {
-            int v = newValueEdit_->text().toInt(&ok);
-            if (!ok) break;
-            int8_t vv = static_cast<int8_t>(v);
-            target_->writeMemory(addr, &vv, sizeof(vv));
-            bytes = QByteArray(reinterpret_cast<char *>(&vv), sizeof(vv));
-            break;
-        }
-        case core::ValueType::Int16: {
-            int v = newValueEdit_->text().toInt(&ok);
-            if (!ok) break;
-            int16_t vv = static_cast<int16_t>(v);
-            target_->writeMemory(addr, &vv, sizeof(vv));
-            bytes = QByteArray(reinterpret_cast<char *>(&vv), sizeof(vv));
-            break;
-        }
-        case core::ValueType::Int32: {
-            int32_t v = newValueEdit_->text().toInt(&ok);
-            if (!ok) break;
-            target_->writeMemory(addr, &v, sizeof(v));
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
-        case core::ValueType::Int64: {
-            int64_t v = newValueEdit_->text().toLongLong(&ok);
-            if (!ok) break;
-            target_->writeMemory(addr, &v, sizeof(v));
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
-        case core::ValueType::Float: {
-            float v = newValueEdit_->text().toFloat(&ok);
-            if (!ok) break;
-            target_->writeMemory(addr, &v, sizeof(v));
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
-        case core::ValueType::Double: {
-            double v = newValueEdit_->text().toDouble(&ok);
-            if (!ok) break;
-            target_->writeMemory(addr, &v, sizeof(v));
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
+    std::vector<uint8_t> bytes;
+    if (!core::writeScalarText(*target_, w.address, w.type, newValueEdit_->text().toStdString(), &bytes)) {
+        return;
     }
-    if (!bytes.isEmpty()) {
-        w.stored = bytes;
-        w.last = bytes;
+    QByteArray stored(reinterpret_cast<const char *>(bytes.data()), static_cast<int>(bytes.size()));
+    if (!stored.isEmpty()) {
+        w.stored = stored;
+        w.last = stored;
         if (freezeCheck_->isChecked()) {
             w.frozen = true;
             if (!freezeTimer_->isActive()) freezeTimer_->start();
@@ -2016,16 +1886,9 @@ void MainWindow::onAddWatch() {
         w.frozen = false;
         w.stored.clear();
         QByteArray cur;
-        switch (w.type) {
-            case core::ValueType::Byte: { int8_t v=0; if (target_->readMemory(addr,&v,sizeof(v))) cur=QByteArray(reinterpret_cast<char*>(&v),sizeof(v)); break; }
-            case core::ValueType::Int16:{ int16_t v=0; if (target_->readMemory(addr,&v,sizeof(v))) cur=QByteArray(reinterpret_cast<char*>(&v),sizeof(v)); break; }
-            case core::ValueType::Int32:{ int32_t v=0; if (target_->readMemory(addr,&v,sizeof(v))) cur=QByteArray(reinterpret_cast<char*>(&v),sizeof(v)); break; }
-            case core::ValueType::Int64:{ int64_t v=0; if (target_->readMemory(addr,&v,sizeof(v))) cur=QByteArray(reinterpret_cast<char*>(&v),sizeof(v)); break; }
-            case core::ValueType::Float:{ float v=0; if (target_->readMemory(addr,&v,sizeof(v))) cur=QByteArray(reinterpret_cast<char*>(&v),sizeof(v)); break; }
-            case core::ValueType::Double:{ double v=0; if (target_->readMemory(addr,&v,sizeof(v))) cur=QByteArray(reinterpret_cast<char*>(&v),sizeof(v)); break; }
-            case core::ValueType::ArrayOfByte:
-            case core::ValueType::String:
-                break;
+        std::vector<uint8_t> scalar;
+        if (core::readScalar(*target_, addr, w.type, scalar)) {
+            cur = QByteArray(reinterpret_cast<const char *>(scalar.data()), static_cast<int>(scalar.size()));
         }
         w.last = cur;
         if (!w.frozen) w.stored = cur;
@@ -2059,50 +1922,11 @@ void MainWindow::onUpdateWatchValue() {
     if (!idx.isValid()) return;
     int row = idx.row();
     if (row < 0 || row >= static_cast<int>(watches_.size())) return;
-    bool ok = false;
     auto &w = watches_[row];
     if (w.isScript) return;
-    QByteArray bytes;
-    switch (w.type) {
-        case core::ValueType::Byte: {
-            int v = watchValueEdit_->text().toInt(&ok);
-            if (!ok) return;
-            int8_t vv = static_cast<int8_t>(v);
-            bytes = QByteArray(reinterpret_cast<char *>(&vv), sizeof(vv));
-            break;
-        }
-        case core::ValueType::Int16: {
-            int v = watchValueEdit_->text().toInt(&ok);
-            if (!ok) return;
-            int16_t vv = static_cast<int16_t>(v);
-            bytes = QByteArray(reinterpret_cast<char *>(&vv), sizeof(vv));
-            break;
-        }
-        case core::ValueType::Int32: {
-            int32_t v = watchValueEdit_->text().toInt(&ok);
-            if (!ok) return;
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
-        case core::ValueType::Int64: {
-            int64_t v = watchValueEdit_->text().toLongLong(&ok);
-            if (!ok) return;
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
-        case core::ValueType::Float: {
-            float v = watchValueEdit_->text().toFloat(&ok);
-            if (!ok) return;
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
-        case core::ValueType::Double: {
-            double v = watchValueEdit_->text().toDouble(&ok);
-            if (!ok) return;
-            bytes = QByteArray(reinterpret_cast<char *>(&v), sizeof(v));
-            break;
-        }
-    }
+    auto bytesOpt = core::parseScalar(watchValueEdit_->text().toStdString(), w.type);
+    if (!bytesOpt) return;
+    QByteArray bytes(reinterpret_cast<const char *>(bytesOpt->data()), static_cast<int>(bytesOpt->size()));
     if (bytes.isEmpty()) return;
     if (!target_->writeMemory(w.address, bytes.data(), static_cast<size_t>(bytes.size()))) {
         QMessageBox::warning(this, "Write failed", "Could not write value to target process.");
@@ -2122,36 +1946,26 @@ void MainWindow::onSaveTable() {
     if (watches_.empty()) return;
     QString fileName = QFileDialog::getSaveFileName(this, "Save Cheat Table", QString(), "Cheat Tables (*.json);;All Files (*.*)");
     if (fileName.isEmpty()) return;
-    QJsonArray arr;
+    std::vector<core::CheatEntry> entries;
+    entries.reserve(watches_.size());
     for (const auto &w : watches_) {
-        QJsonObject o;
-        if (w.isScript) {
-            o["isScript"] = true;
-            o["description"] = w.description;
-            o["script"] = w.scriptSource;
-            o["active"] = w.scriptActive;
-        } else {
-            o["address"] = QString::asprintf("0x%llx", static_cast<unsigned long long>(w.address));
-            o["type"] = typeToString(w.type);
-            o["description"] = w.description;
-            o["pointer"] = w.isPointer;
-            o["frozen"] = w.frozen;
-            QString valueHex;
-            for (int i = 0; i < w.stored.size(); ++i) {
-                uint8_t b = static_cast<uint8_t>(w.stored[static_cast<int>(i)]);
-                valueHex += QString::asprintf("%02x", b);
-                if (i + 1 < w.stored.size()) valueHex += " ";
-            }
-            o["valueBytes"] = valueHex;
-        }
-        arr.append(o);
+        core::CheatEntry e;
+        e.address = w.address;
+        e.type = w.type;
+        e.description = w.description.toStdString();
+        e.isPointer = w.isPointer;
+        e.offsets = w.offsets;
+        e.frozen = w.frozen;
+        e.stored.assign(w.stored.begin(), w.stored.end());
+        e.isScript = w.isScript;
+        e.scriptActive = w.scriptActive;
+        e.scriptSource = w.scriptSource.toStdString();
+        entries.push_back(std::move(e));
     }
-    QJsonObject root;
-    root["entries"] = arr;
-    QJsonDocument doc(root);
+    std::string json = core::CheatTable::serialize(entries);
     QFile f(fileName);
     if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        f.write(doc.toJson());
+        f.write(json.data(), static_cast<qint64>(json.size()));
     }
 }
 
@@ -2161,55 +1975,23 @@ void MainWindow::onLoadTable() {
     QFile f(fileName);
     if (!f.open(QIODevice::ReadOnly)) return;
     QByteArray data = f.readAll();
-    QJsonParseError err{};
-    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
-    QJsonObject root = doc.object();
-    QJsonArray arr = root["entries"].toArray();
+    std::vector<core::CheatEntry> entries =
+        core::CheatTable::deserialize(std::string(data.constData(), static_cast<size_t>(data.size())));
     watches_.clear();
-    for (const auto &val : arr) {
-        if (!val.isObject()) continue;
-        QJsonObject o = val.toObject();
-        if (o["isScript"].toBool()) {
-            WatchEntry w;
-            w.isScript = true;
-            w.description = o["description"].toString();
-            w.scriptSource = o["script"].toString();
-            w.scriptActive = false;
-            watches_.push_back(w);
-            continue;
-        }
-        QString addrStr = o["address"].toString();
-        bool ok = false;
-        uintptr_t addr = addrStr.toULongLong(&ok, 0);
-        if (!ok || addr == 0) continue;
-        QString typeStr = o["type"].toString();
-        core::ValueType type = core::ValueType::Int32;
-        if (typeStr == "Byte") type = core::ValueType::Byte;
-        else if (typeStr == "2 Bytes") type = core::ValueType::Int16;
-        else if (typeStr == "4 Bytes") type = core::ValueType::Int32;
-        else if (typeStr == "8 Bytes") type = core::ValueType::Int64;
-        else if (typeStr == "Float") type = core::ValueType::Float;
-        else if (typeStr == "Double") type = core::ValueType::Double;
-        else if (typeStr == "AOB") type = core::ValueType::ArrayOfByte;
-        else if (typeStr == "String") type = core::ValueType::String;
+    for (auto &e : entries) {
         WatchEntry w;
-        w.address = addr;
-        w.type = type;
-        w.description = o["description"].toString();
-        w.isPointer = o["pointer"].toBool(false);
-        w.frozen = o["frozen"].toBool(false);
-        QString valueHex = o["valueBytes"].toString();
-        QByteArray stored;
-        std::istringstream iss(valueHex.toStdString());
-        std::string tok;
-        while (iss >> tok) {
-            uint8_t b = static_cast<uint8_t>(std::stoul(tok, nullptr, 16));
-            stored.append(static_cast<char>(b));
-        }
-        w.stored = stored;
-        w.last = stored;
-        watches_.push_back(w);
+        w.address = e.address;
+        w.type = e.type;
+        w.description = QString::fromStdString(e.description);
+        w.isPointer = e.isPointer;
+        w.offsets = e.offsets;
+        w.frozen = e.frozen;
+        w.stored = QByteArray(reinterpret_cast<const char *>(e.stored.data()), static_cast<int>(e.stored.size()));
+        w.last = w.stored;
+        w.isScript = e.isScript;
+        w.scriptActive = false;
+        w.scriptSource = QString::fromStdString(e.scriptSource);
+        watches_.push_back(std::move(w));
     }
     bool anyFrozen = false;
     for (const auto &w : watches_) {
@@ -2287,7 +2069,7 @@ void MainWindow::onViewMemory() {
                                  "Select an address from the scan results or watch list first.");
         return;
     }
-    memoryViewer_->setTarget(target_.get(), baseAddr);
+    memoryViewer_->setTarget(target_.get(), baseAddr, injector_.get());
     if (memoryViewerDock_) {
         memoryViewerDock_->show();
         memoryViewerDock_->raise();
@@ -2347,58 +2129,12 @@ void MainWindow::refreshResultValues() {
         }
         uint64_t raw = previous;
         bool readOk = false;
-        switch (type) {
-            case core::ValueType::Byte: {
-                int8_t v = 0;
-                if (target_->readMemory(addr, &v, sizeof(v))) {
-                    std::memcpy(&raw, &v, sizeof(v));
-                    readOk = true;
-                }
-                break;
+        {
+            std::vector<uint8_t> scalar;
+            if (core::readScalar(*target_, addr, type, scalar)) {
+                std::memcpy(&raw, scalar.data(), scalar.size());
+                readOk = true;
             }
-            case core::ValueType::Int16: {
-                int16_t v = 0;
-                if (target_->readMemory(addr, &v, sizeof(v))) {
-                    std::memcpy(&raw, &v, sizeof(v));
-                    readOk = true;
-                }
-                break;
-            }
-            case core::ValueType::Int32: {
-                int32_t v = 0;
-                if (target_->readMemory(addr, &v, sizeof(v))) {
-                    std::memcpy(&raw, &v, sizeof(v));
-                    readOk = true;
-                }
-                break;
-            }
-            case core::ValueType::Int64: {
-                int64_t v = 0;
-                if (target_->readMemory(addr, &v, sizeof(v))) {
-                    std::memcpy(&raw, &v, sizeof(v));
-                    readOk = true;
-                }
-                break;
-            }
-            case core::ValueType::Float: {
-                float v = 0;
-                if (target_->readMemory(addr, &v, sizeof(v))) {
-                    std::memcpy(&raw, &v, sizeof(v));
-                    readOk = true;
-                }
-                break;
-            }
-            case core::ValueType::Double: {
-                double v = 0;
-                if (target_->readMemory(addr, &v, sizeof(v))) {
-                    std::memcpy(&raw, &v, sizeof(v));
-                    readOk = true;
-                }
-                break;
-            }
-            case core::ValueType::ArrayOfByte:
-            case core::ValueType::String:
-                continue;
         }
 
         if (!readOk) continue;
@@ -2447,13 +2183,7 @@ uintptr_t MainWindow::resultAddressForRow(int row) const {
 
 uintptr_t MainWindow::resolvePointerChain(uintptr_t base, const std::vector<int64_t> &offsets) const {
     if (!target_ || !target_->isAttached()) return 0;
-    uintptr_t current = base;
-    for (size_t i = 0; i < offsets.size(); ++i) {
-        uintptr_t pointed = 0;
-        if (!target_->readMemory(current, &pointed, sizeof(pointed))) return 0;
-        current = pointed + offsets[i];
-    }
-    return current;
+    return core::resolvePointerChain(*target_, base, offsets);
 }
 
 QVariant MainWindow::resultData(int row, int column, int role) const {
@@ -2470,11 +2200,11 @@ QVariant MainWindow::resultData(int row, int column, int role) const {
             case 0:
                 return QString::asprintf("0x%llx", static_cast<unsigned long long>(addr));
             case 1:
-                return formatRawValue(currentRaw, resultDisplayType_);
+                return formatRaw(currentRaw, resultDisplayType_);
             case 2: {
                 auto it = lastValues_.find(addr);
                 if (it != lastValues_.end()) {
-                    return formatRawValue(it->second, resultDisplayType_);
+                    return formatRaw(it->second, resultDisplayType_);
                 }
                 return QString();
             }
@@ -2483,10 +2213,10 @@ QVariant MainWindow::resultData(int row, int column, int role) const {
                 if (auto it = firstValues_.find(addr); it != firstValues_.end()) {
                     firstRaw = it->second;
                 }
-                return formatRawValue(firstRaw, resultDisplayType_);
+                return formatRaw(firstRaw, resultDisplayType_);
             }
             case 4:
-                return typeToString(resultDisplayType_);
+                return typeName(resultDisplayType_);
         }
     }
     if (role == Qt::BackgroundRole && column == 1) {
@@ -2569,74 +2299,12 @@ void MainWindow::pulseWatchRow(int row, const QColor &color) {
 }
 
 double MainWindow::decodeNumeric(const QByteArray &bytes, core::ValueType type, bool *ok) const {
-    if (ok) *ok = false;
-    if (bytes.isEmpty()) return 0.0;
-    auto ensureSize = [&](int expected) -> bool {
-        return bytes.size() >= expected;
-    };
-    switch (type) {
-        case core::ValueType::Byte: {
-            if (!ensureSize(static_cast<int>(sizeof(int8_t)))) return 0.0;
-            int8_t v = 0;
-            std::memcpy(&v, bytes.constData(), sizeof(v));
-            if (ok) *ok = true;
-            return v;
-        }
-        case core::ValueType::Int16: {
-            if (!ensureSize(static_cast<int>(sizeof(int16_t)))) return 0.0;
-            int16_t v = 0;
-            std::memcpy(&v, bytes.constData(), sizeof(v));
-            if (ok) *ok = true;
-            return v;
-        }
-        case core::ValueType::Int32: {
-            if (!ensureSize(static_cast<int>(sizeof(int32_t)))) return 0.0;
-            int32_t v = 0;
-            std::memcpy(&v, bytes.constData(), sizeof(v));
-            if (ok) *ok = true;
-            return v;
-        }
-        case core::ValueType::Int64: {
-            if (!ensureSize(static_cast<int>(sizeof(int64_t)))) return 0.0;
-            int64_t v = 0;
-            std::memcpy(&v, bytes.constData(), sizeof(v));
-            if (ok) *ok = true;
-            return static_cast<double>(v);
-        }
-        case core::ValueType::Float: {
-            if (!ensureSize(static_cast<int>(sizeof(float)))) return 0.0;
-            float v = 0;
-            std::memcpy(&v, bytes.constData(), sizeof(v));
-            if (ok) *ok = true;
-            return v;
-        }
-        case core::ValueType::Double: {
-            if (!ensureSize(static_cast<int>(sizeof(double)))) return 0.0;
-            double v = 0;
-            std::memcpy(&v, bytes.constData(), sizeof(v));
-            if (ok) *ok = true;
-            return v;
-        }
-        default:
-            return 0.0;
-    }
+    return core::decodeNumeric(reinterpret_cast<const uint8_t *>(bytes.constData()),
+                               static_cast<size_t>(bytes.size()), type, ok);
 }
 
 double MainWindow::decodeRaw(uint64_t raw, core::ValueType type, bool *ok) const {
-    double value = 0.0;
-    switch (type) {
-        case core::ValueType::Byte: value = static_cast<double>(unpackRaw<int8_t>(raw)); break;
-        case core::ValueType::Int16: value = static_cast<double>(unpackRaw<int16_t>(raw)); break;
-        case core::ValueType::Int32: value = static_cast<double>(unpackRaw<int32_t>(raw)); break;
-        case core::ValueType::Int64: value = static_cast<double>(unpackRaw<int64_t>(raw)); break;
-        case core::ValueType::Float: value = static_cast<double>(unpackRaw<float>(raw)); break;
-        case core::ValueType::Double: value = unpackRaw<double>(raw); break;
-        default:
-            if (ok) *ok = false;
-            return 0.0;
-    }
-    if (ok) *ok = true;
-    return value;
+    return core::decodeRaw(raw, type, ok);
 }
 
 void MainWindow::updateTrackedEntries() {
@@ -2649,32 +2317,14 @@ void MainWindow::updateTrackedEntries() {
         QString valueText = QStringLiteral("??");
         if (target_ && target_->isAttached()) {
             QByteArray buf;
-            switch (type) {
-                case core::ValueType::Byte: {
-                    int8_t v = 0; if (target_->readMemory(addr, &v, sizeof(v))) buf = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-                }
-                case core::ValueType::Int16: {
-                    int16_t v = 0; if (target_->readMemory(addr, &v, sizeof(v))) buf = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-                }
-                case core::ValueType::Int32: {
-                    int32_t v = 0; if (target_->readMemory(addr, &v, sizeof(v))) buf = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-                }
-                case core::ValueType::Int64: {
-                    int64_t v = 0; if (target_->readMemory(addr, &v, sizeof(v))) buf = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-                }
-                case core::ValueType::Float: {
-                    float v = 0; if (target_->readMemory(addr, &v, sizeof(v))) buf = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-                }
-                case core::ValueType::Double: {
-                    double v = 0; if (target_->readMemory(addr, &v, sizeof(v))) buf = QByteArray(reinterpret_cast<char *>(&v), sizeof(v)); break;
-                }
-                default:
-                    break;
+            std::vector<uint8_t> scalar;
+            if (core::readScalar(*target_, addr, type, scalar)) {
+                buf = QByteArray(reinterpret_cast<const char *>(scalar.data()), static_cast<int>(scalar.size()));
             }
             if (!buf.isEmpty()) {
                 valueText = formatValue(buf, type);
             } else if (auto it = liveValues_.find(addr); it != liveValues_.end()) {
-                valueText = formatRawValue(it->second, type);
+                valueText = formatRaw(it->second, type);
             }
         }
         auto *item = new QTreeWidgetItem(trackingList_);
@@ -2750,10 +2400,10 @@ void MainWindow::updateSmartPanel(uintptr_t address, core::ValueType type, const
     QStringList lines;
     lines << QString("Context: %1").arg(source.isEmpty() ? QStringLiteral("Global") : source);
     lines << QString("Address: 0x%1").arg(QString::number(address, 16));
-    lines << QString("Type: %1").arg(typeToString(type));
+    lines << QString("Type: %1").arg(typeName(type));
     lines << QString("Alignment: %1 bytes").arg(sizeForType(type));
     if (auto it = guessedTypes_.find(address); it != guessedTypes_.end()) {
-        lines << QString("Heuristic type: %1").arg(typeToString(it->second));
+        lines << QString("Heuristic type: %1").arg(typeName(it->second));
     }
     if (auto it = metaScores_.find(address); it != metaScores_.end()) {
         lines << QString("Confidence score: %1").arg(it->second, 0, 'f', 1);
@@ -2768,7 +2418,7 @@ void MainWindow::updateSmartPanel(uintptr_t address, core::ValueType type, const
     QString valueText = QStringLiteral("(unavailable)");
     QByteArray scalarBuf;
     auto readScalar = [&](core::ValueType valueType) -> bool {
-        int bytes = sizeForType(valueType);
+        int bytes = static_cast<int>(core::sizeForType(valueType));
         if (!target_ || !target_->isAttached() || bytes <= 0) return false;
         scalarBuf.resize(bytes);
         if (!target_->readMemory(address, scalarBuf.data(), static_cast<size_t>(bytes))) return false;
@@ -2777,7 +2427,7 @@ void MainWindow::updateSmartPanel(uintptr_t address, core::ValueType type, const
     };
     if (!readScalar(type)) {
         if (auto it = liveValues_.find(address); it != liveValues_.end()) {
-            valueText = formatRawValue(it->second, type);
+            valueText = formatRaw(it->second, type);
         }
     }
     lines << QString("Value: %1").arg(valueText);
@@ -3014,13 +2664,32 @@ void MainWindow::openPointerScannerAt(uintptr_t address) {
     }
 }
 
-AutoAssemblerDialog *MainWindow::ensureAutoAsmRunner() {
-    if (!injector_) return nullptr;
-    if (!autoAsmRunner_) {
-        autoAsmRunner_ = new AutoAssemblerDialog(injector_.get(), this);
-        autoAsmRunner_->hide();
+bool MainWindow::setScriptState(size_t index, bool enable) {
+    if (index >= watches_.size()) return false;
+    auto &w = watches_[index];
+    if (!w.isScript || w.scriptActive == enable) return true;
+    if (!injector_) return false;
+    core::AutoAssembler runner(*injector_);
+    std::string log;
+    if (enable) {
+        if (!runner.enableScript(w.scriptSource.toStdString(), &log)) {
+            QMessageBox::warning(this, "Auto Assembler",
+                                 log.empty() ? "Failed to execute script." : QString::fromStdString(log));
+            return false;
+        }
+    } else {
+        std::vector<std::string> errors;
+        auto parsed = runner.parse(w.scriptSource.toStdString(), errors);
+        if (!parsed) {
+            QMessageBox::warning(this, "Auto Assembler", "Failed to parse script.");
+            return false;
+        }
+        if (!parsed->disableCmds.empty()) runner.apply(parsed->disableCmds);
+        else runner.restore(parsed->enableCmds);
     }
-    return autoAsmRunner_;
+    w.scriptActive = enable;
+    populateWatchList(true);
+    return true;
 }
 
 void MainWindow::onScriptSubmitted(const QString &name, const QString &script) {
@@ -3031,22 +2700,6 @@ void MainWindow::onScriptSubmitted(const QString &name, const QString &script) {
     w.type = core::ValueType::Byte;
     watches_.push_back(w);
     populateWatchList(true);
-}
-
-bool MainWindow::setScriptState(size_t index, bool enable) {
-    if (index >= watches_.size()) return false;
-    auto &w = watches_[index];
-    if (!w.isScript || w.scriptActive == enable) return true;
-    auto *runner = ensureAutoAsmRunner();
-    if (!runner) return false;
-    QString log;
-    if (!runner->executeScriptText(w.scriptSource, enable, &log)) {
-        QMessageBox::warning(this, "Auto Assembler", log.isEmpty() ? "Failed to execute script." : log);
-        return false;
-    }
-    w.scriptActive = enable;
-    populateWatchList(true);
-    return true;
 }
 
 void MainWindow::promptPatchBytes(uintptr_t address) {
@@ -3143,88 +2796,16 @@ void MainWindow::analyzeMetaResults() {
     pointerCandidates_.clear();
     if (!target_ || !target_->isAttached() || !scanner_) return;
     cachedRegions_ = target_->regions();
-    const auto &res = scanner_->results();
-    if (res.empty()) return;
-    constexpr size_t kLimit = 2048;
-    size_t limit = std::min<size_t>(res.size(), kLimit);
-    std::vector<uintptr_t> addresses;
-    addresses.reserve(limit);
-    for (size_t i = 0; i < limit; ++i) addresses.push_back(res[i].address);
-    std::sort(addresses.begin(), addresses.end());
-    constexpr uintptr_t kGroupGap = 32;
-    std::vector<uintptr_t> groupBuffer;
-    auto flushGroup = [&]() {
-        if (groupBuffer.size() > 1) {
-            QString label = QString("Cluster 0x%1 (%2 entries)")
-                                .arg(static_cast<unsigned long long>(groupBuffer.front()), 0, 16)
-                                .arg(groupBuffer.size());
-            for (auto addr : groupBuffer) metaGroups_[addr] = label;
+    auto meta = core::analyzeMetaResults(*target_, scanner_->results(), resultDisplayType_);
+    for (const auto &kv : meta) {
+        metaScores_[kv.first] = kv.second.score;
+        guessedTypes_[kv.first] = kv.second.guessedType;
+        if (!kv.second.groupLabel.empty()) {
+            metaGroups_[kv.first] = QString::fromStdString(kv.second.groupLabel);
         }
-        groupBuffer.clear();
-    };
-    uintptr_t previous = 0;
-    for (uintptr_t addr : addresses) {
-        if (groupBuffer.empty() || addr - previous <= kGroupGap) {
-            groupBuffer.push_back(addr);
-        } else {
-            flushGroup();
-            groupBuffer.push_back(addr);
+        if (kv.second.pointerCandidate) {
+            pointerCandidates_.insert(kv.first);
         }
-        previous = addr;
-    }
-    flushGroup();
-
-    for (size_t i = 0; i < limit; ++i) {
-        uintptr_t addr = res[i].address;
-        double score = 0.0;
-        core::ValueType guess = resultDisplayType_;
-        std::array<unsigned char, 16> buffer{};
-        bool hasBytes = target_->readMemory(addr, buffer.data(), buffer.size());
-        bool asciiCandidate = false;
-        if (hasBytes) {
-            int printable = 0;
-            for (unsigned char ch : buffer) {
-                if (ch == 0) continue;
-                if (ch >= 32 && ch <= 126) ++printable;
-            }
-            if (printable >= 6) {
-                asciiCandidate = true;
-                score += 25.0;
-                guess = core::ValueType::String;
-            }
-        }
-
-        uintptr_t possiblePtr = 0;
-        if (hasBytes && buffer.size() >= sizeof(uintptr_t)) {
-            std::memcpy(&possiblePtr, buffer.data(), sizeof(uintptr_t));
-            if (looksLikePointer(possiblePtr)) {
-                pointerCandidates_.insert(addr);
-                score += 40.0;
-            }
-        }
-
-        if (!asciiCandidate && hasBytes) {
-            float fv = 0.f;
-            double dv = 0.0;
-            std::memcpy(&fv, buffer.data(), std::min(sizeof(fv), buffer.size()));
-            std::memcpy(&dv, buffer.data(), std::min(sizeof(dv), buffer.size()));
-            if (std::isfinite(fv) && std::abs(fv) < 1e6f) {
-                guess = core::ValueType::Float;
-                score += 15.0;
-            } else if (std::isfinite(dv) && std::abs(dv) < 1e12) {
-                guess = core::ValueType::Double;
-                score += 12.0;
-            }
-        }
-
-        if (auto it = metaGroups_.find(addr); it != metaGroups_.end()) score += 10.0;
-        if (const auto *region = regionFor(addr)) {
-            if (region->perms.find('w') != std::string::npos) score += 5.0;
-            if (region->perms.find('x') != std::string::npos) score -= 3.0;
-        }
-
-        metaScores_[addr] = score;
-        guessedTypes_[addr] = guess;
     }
 }
 
@@ -3248,7 +2829,7 @@ QString MainWindow::metaSummary(uintptr_t address) const {
         parts << QString("Score: %1").arg(it->second, 0, 'f', 1);
     }
     if (auto it = guessedTypes_.find(address); it != guessedTypes_.end()) {
-        parts << QString("Heuristic type: %1").arg(typeToString(it->second));
+        parts << QString("Heuristic type: %1").arg(typeName(it->second));
     }
     if (pointerCandidates_.find(address) != pointerCandidates_.end()) {
         parts << QStringLiteral("Pointer candidate");
@@ -3370,31 +2951,15 @@ void MainWindow::loadSettings() {
 
 QString MainWindow::makePatchScript(uintptr_t address, const QString &patchBytes, bool viaAob) const {
     if (address == 0) return QString();
-    QString trimmed = patchBytes.trimmed();
-    QStringList patchTokens = trimmed.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-    if (patchTokens.isEmpty()) {
-        patchTokens = {QStringLiteral("90"), QStringLiteral("90"), QStringLiteral("90"), QStringLiteral("90"), QStringLiteral("90")};
-    }
-    QString patchLine = patchTokens.join(' ');
-    int byteCount = patchTokens.size();
+    auto patchVec = parseHexBytes(patchBytes);
+    int byteCount = patchVec.empty() ? 5 : static_cast<int>(patchVec.size());
+    std::vector<uint8_t> origVec;
     QString original = readBytesHex(address, byteCount);
-    QString addrStr = QString::asprintf("0x%llx", static_cast<unsigned long long>(address));
-    QStringList lines;
-    lines << QStringLiteral("[ENABLE]");
-    if (viaAob) {
-        QString pattern = original.isEmpty() ? patchLine : original;
-        lines << QStringLiteral("aobscanmodule(INJECT,$process,%1)").arg(pattern);
-        lines << QStringLiteral("patch INJECT %1").arg(patchLine);
-    } else {
-        lines << QStringLiteral("patch %1 %2").arg(addrStr, patchLine);
-    }
     if (!original.isEmpty()) {
-        lines << QStringLiteral("; original %1").arg(original);
+        origVec = parseHexBytes(original);
     }
-    lines << QString();
-    lines << QStringLiteral("[DISABLE]");
-    lines << (viaAob ? QStringLiteral("restore INJECT") : QStringLiteral("restore %1").arg(addrStr));
-    return lines.join('\n');
+    return QString::fromStdString(core::AutoAssembler::patchScript(
+        address, patchVec, viaAob, origVec.empty() ? nullptr : &origVec));
 }
 
 void MainWindow::updatePointerGraph(uintptr_t base, qint64 offset, uintptr_t finalAddr) {

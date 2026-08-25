@@ -1,5 +1,6 @@
 #include "gui/MemoryViewerWindow.h"
 
+#include "core/CodeInjector.h"
 #include "core/TargetProcess.h"
 #include "gui/MainWindow.h"
 
@@ -340,8 +341,9 @@ void MemoryViewerWindow::setupUi() {
     });
 }
 
-void MemoryViewerWindow::setTarget(core::TargetProcess *proc, uintptr_t address) {
+void MemoryViewerWindow::setTarget(core::TargetProcess *proc, uintptr_t address, core::CodeInjector *injector) {
     proc_ = proc;
+    injector_ = injector;
     patchBackups_.clear();
     if (!proc_ || address == 0) {
         lastSelectedAddress_ = 0;
@@ -650,6 +652,14 @@ bool MemoryViewerWindow::ensurePatchBackup(uintptr_t address, size_t length) {
 
 void MemoryViewerWindow::restorePatchedBytes(uintptr_t address) {
     if (!proc_) return;
+    if (injector_) {
+        if (!injector_->restore(address)) {
+            QMessageBox::warning(this, "Undo patch", "No patch found or failed to restore bytes.");
+            return;
+        }
+        refreshView();
+        return;
+    }
     auto it = patchBackups_.find(address);
     if (it == patchBackups_.end()) return;
     if (!proc_->writeMemory(address, it->second.data(), it->second.size())) {
@@ -763,6 +773,14 @@ void MemoryViewerWindow::patchBytes(uintptr_t address, const QString &defaultByt
         bytes.push_back(val);
     }
     if (bytes.empty()) return;
+    if (injector_) {
+        if (!injector_->patchBytes(address, bytes)) {
+            QMessageBox::warning(this, "Patch bytes", "Failed to write memory.");
+            return;
+        }
+        refreshView();
+        return;
+    }
     if (!ensurePatchBackup(address, bytes.size())) {
         QMessageBox::warning(this, "Patch bytes", "Could not read original bytes for undo.");
     }
@@ -805,7 +823,9 @@ void MemoryViewerWindow::onHexContextMenu(const QPoint &pos) {
         copyValue = menu.addAction("Copy byte value");
         editValue = menu.addAction("Edit byte...");
         jumpDisasm = menu.addAction("Jump to instruction");
-        if (patchBackups_.find(cellAddr) != patchBackups_.end()) {
+        bool hasPatch = injector_ ? injector_->patches().count(cellAddr) > 0
+                                  : patchBackups_.find(cellAddr) != patchBackups_.end();
+        if (hasPatch) {
             restoreAction = menu.addAction("Restore original instruction");
         }
     }
@@ -852,7 +872,9 @@ void MemoryViewerWindow::onDisasmContextMenu(const QPoint &pos) {
     QAction *nopOut = menu.addAction("Replace with NOPs");
     QAction *patch = menu.addAction("Patch bytes...");
     QAction *restoreAction = nullptr;
-    if (patchBackups_.find(addr) != patchBackups_.end()) {
+    bool hasPatch = injector_ ? injector_->patches().count(addr) > 0
+                              : patchBackups_.find(addr) != patchBackups_.end();
+    if (hasPatch) {
         restoreAction = menu.addAction("Restore original instruction");
     }
 

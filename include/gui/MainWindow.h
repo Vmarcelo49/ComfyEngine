@@ -104,7 +104,6 @@ private:
     void applyGlobalStyle();
     void onScriptSubmitted(const QString &name, const QString &script);
     bool setScriptState(size_t index, bool enable);
-    AutoAssemblerDialog *ensureAutoAsmRunner();
     void promptPatchBytes(uintptr_t address);
     void activateModule(const QString &tag);
     void showDock(QDockWidget *dock);
@@ -215,7 +214,6 @@ private:
     bool showPreviousColumn_{true};
     PointerScannerDialog *pointerScanner_{};
     AutoAssemblerDialog *autoAsm_{};
-    AutoAssemblerDialog *autoAsmRunner_{};
     ProcessDialog *processDialog_{};
     MemoryViewerWindow *memoryViewer_{};
     QDockWidget *memoryViewerDock_{};

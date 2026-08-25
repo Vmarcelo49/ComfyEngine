@@ -9,7 +9,10 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 COMPONENTS Widgets REQUIRED)
 
+enable_testing()
+
 add_subdirectory(src)
 add_subdirectory(testgame)
 add_subdirectory(ce_watch)
+add_subdirectory(tests)
 

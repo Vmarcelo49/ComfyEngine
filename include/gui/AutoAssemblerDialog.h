@@ -1,10 +1,11 @@
 #pragma once
 
+#include "core/AutoAssembler.h"
+
 #include <QDialog>
+#include <memory>
 #include <vector>
 #include <cstdint>
-#include <unordered_map>
-#include <optional>
 
 class QPlainTextEdit;
 class QPushButton;
@@ -38,6 +39,7 @@ private slots:
 
 private:
     core::CodeInjector *injector_{};
+    std::unique_ptr<core::AutoAssembler> engine_;
     QPlainTextEdit *editor_{};
     QPushButton *enableBtn_{};
     QPushButton *disableBtn_{};
@@ -55,33 +57,13 @@ private:
 
     bool enabled_{false};
 
-    struct Command {
-        enum class Type { Patch, Restore };
-        Type type;
-        uintptr_t address;
-        std::vector<uint8_t> bytes;
-    };
-
-    using CommandList = std::vector<Command>;
-    std::optional<Command> parseLine(const std::string &line, QString &errorOut,
-                                     const std::unordered_map<std::string, uintptr_t> &symbols) const;
-    std::pair<CommandList, CommandList> parseSections(const QString &text, QStringList &errors);
-    void setStatus(const QString &text, bool ok);
-    void applyCommands(const CommandList &cmds);
-    void restoreCommands(const CommandList &cmds);
-    std::optional<uintptr_t> scanAob(const std::string &pattern, QString &errorOut,
-                                     const std::string &moduleFilter = std::string()) const;
-    bool parseAddressWithSymbols(const std::string &addrStr,
-                                 const std::unordered_map<std::string, uintptr_t> &symbols,
-                                 uintptr_t &outAddr, QString &errorOut) const;
-    std::unordered_map<std::string, uintptr_t> collectModuleBases() const;
-    std::unordered_map<std::string, uintptr_t> symbols_;
+    using CommandList = std::vector<core::AutoAssembler::Command>;
     CommandList lastEnable_;
     CommandList lastDisable_;
 
     enum class TemplateKind { CodeInjection, AobInjection, Empty };
     void insertTemplate(TemplateKind kind);
-    QString joinBytes(const std::vector<uint8_t> &bytes, const QString &sep) const;
-    std::vector<uint8_t> ensureTemplateBytes(uintptr_t address, QString &errorOut) const;
+    void setStatus(const QString &text, bool ok);
+    std::vector<uint8_t> ensureTemplateBytes(uintptr_t address) const;
     QString buildScriptFromEditor() const;
 };

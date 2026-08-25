@@ -18,6 +18,7 @@ class QShowEvent;
 
 namespace core {
 class TargetProcess;
+class CodeInjector;
 }
 
 class MemoryViewerWindow : public QMainWindow {
@@ -25,7 +26,7 @@ class MemoryViewerWindow : public QMainWindow {
 public:
     explicit MemoryViewerWindow(QWidget *parent = nullptr);
 
-    void setTarget(core::TargetProcess *proc, uintptr_t address);
+    void setTarget(core::TargetProcess *proc, uintptr_t address, core::CodeInjector *injector = nullptr);
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -58,6 +59,7 @@ private:
     void applyStyle();
 
     core::TargetProcess *proc_{};
+    core::CodeInjector *injector_{};
     uintptr_t baseAddress_{0};
     size_t bytesPerRow_{16};
     size_t rows_{256}; // default 4096 bytes per page

@@ -1,7 +1,8 @@
 #pragma once
 
+#include "core/PointerScanner.h"
+
 #include <QDialog>
-#include <memory>
 #include <vector>
 #include <cstdint>
 
@@ -12,24 +13,7 @@ class QCheckBox;
 
 namespace core {
 class TargetProcess;
-
-struct PointerHit {
-    uintptr_t baseAddress;
-    int64_t offset;
-    uintptr_t finalAddress;
-};
-
-class PointerScanner {
-public:
-    explicit PointerScanner(const TargetProcess &proc);
-
-    std::vector<PointerHit> scan(uintptr_t target, int64_t maxOffset, bool writableOnly);
-
-private:
-    const TargetProcess &proc_;
-};
-
-} // namespace core
+}
 
 class PointerScannerDialog : public QDialog {
     Q_OBJECT
