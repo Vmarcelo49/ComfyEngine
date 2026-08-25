@@ -5,6 +5,7 @@
 #include "core/ScalarCodec.h"
 #include "core/TargetProcess.h"
 
+#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -235,6 +236,70 @@ static void testDisassembler() {
     }
 }
 
+static void testAnalysisOnProcess(const char *childPath) {
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    pid_t child = fork();
+    if (child == 0) {
+        dup2(fds[1], STDOUT_FILENO);
+        close(fds[0]);
+        close(fds[1]);
+        execl(childPath, childPath, static_cast<char *>(nullptr));
+        _exit(127);
+    }
+    close(fds[1]);
+    FILE *reader = fdopen(fds[0], "r");
+    uintptr_t xAddr = 0;
+    uintptr_t pAddr = 0;
+    char line[128];
+    while (fgets(line, sizeof(line), reader)) {
+        unsigned long long v = 0;
+        if (sscanf(line, "X=%llx", &v) == 1) xAddr = static_cast<uintptr_t>(v);
+        else if (sscanf(line, "P=%llx", &v) == 1) pAddr = static_cast<uintptr_t>(v);
+        if (xAddr && pAddr) break;
+    }
+    if (!xAddr || !pAddr) {
+        kill(child, SIGKILL);
+        waitpid(child, nullptr, 0);
+        if (reader) fclose(reader);
+        CHECK(false);
+        return;
+    }
+    core::TargetProcess proc;
+    if (!proc.attach(child)) {
+        fprintf(stderr, "attach unavailable; skipping analysis test\n");
+        kill(child, SIGKILL);
+        waitpid(child, nullptr, 0);
+        if (reader) fclose(reader);
+        return;
+    }
+
+    std::vector<uintptr_t> candidates = {xAddr, pAddr, 0xDEADBEEF0000ULL};
+    std::sort(candidates.begin(), candidates.end());
+    auto counts = core::inboundPointerCounts(proc, candidates, 0);
+    CHECK(counts[xAddr] >= 1);
+    CHECK(counts[0xDEADBEEF0000ULL] == 0);
+
+    core::RegionIndex index{proc.regions()};
+    double coh = core::neighborCoherence(proc, xAddr, index, 64);
+    (void)coh;
+
+    std::vector<core::ScanResult> results = {{xAddr, 1337}, {pAddr, static_cast<uint64_t>(xAddr)}};
+    auto meta = core::analyzeMetaResults(proc, results, core::ValueType::Int32);
+    auto itX = meta.find(xAddr);
+    CHECK(itX != meta.end());
+    if (itX != meta.end()) {
+        CHECK(itX->second.inboundPointers >= 1);
+        CHECK(itX->second.guessedType == core::ValueType::Int32);
+    }
+    CHECK(meta.count(pAddr) == 1);
+    CHECK(meta[pAddr].guessedType == core::ValueType::Int32);
+
+    kill(child, SIGKILL);
+    waitpid(child, nullptr, 0);
+    if (reader) fclose(reader);
+}
+
 static void testIntegrationReadWrite(const char *childPath) {
     int fds[2];
     if (pipe(fds) != 0) return;
@@ -304,6 +369,7 @@ int main(int argc, char **argv) {
     testCheatTableRoundTrip();
     testDisassembler();
     testIntegrationReadWrite(argc > 1 ? argv[1] : "./test_target_child");
+    testAnalysisOnProcess(argc > 1 ? argv[1] : "./test_target_child");
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

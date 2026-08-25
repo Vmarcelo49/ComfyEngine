@@ -12,6 +12,8 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 FAIL=0
 GPID=""; DPID=""
 check() { [ "$2" = "$3" ] && echo "PASS $1" || { echo "FAIL $1: want[$2] got[$3]"; FAIL=1; }; }
+pass() { echo "PASS $1"; }
+failf() { echo "FAIL $1"; FAIL=1; }
 
 pkill -f 'mini-game --allow-ptrace' 2>/dev/null
 pkill -f 'cli/comfyd' 2>/dev/null
@@ -56,36 +58,44 @@ check frozen         "9999" "$($CE read "0x$HEALTH" i32 --pid $GPID)"
 $CE watch freeze 0 off --socket "$SOCK" >/dev/null
 $CE watch rm 0 --socket "$SOCK" >/dev/null
 
-echo "== pointer chain: secret(1337) -> pscan back to tail -> base"
-$CE --json scan reset --socket "$SOCK" >/dev/null
-$CE --json scan first --type i32 --mode exact --value 1337 --socket "$SOCK" >/dev/null
-SECRET=$($CE --json scan list --limit 20000 --socket "$SOCK" \
-          | jq -r '.rows[].address' \
-          | while read -r S; do
-                OWN=$($CE regions --perm w --pid $GPID >/dev/null 2>&1 && echo ok)
-                echo "$S"
-            done | head -50)
-TAIL=""
-for S in $SECRET; do S=${S#0x};
-    LINK=$($CE --json pscan "0x$S" --max-offset 8 --writable-only --pid $GPID 2>/dev/null | jq -r '.hits[0].base // empty' | head -1)
-    [ -z "$LINK" ] && continue
-    T=$(printf '%x' $(( 0x${LINK#0x} - 8 )))
-    TV=$($CE read "0x$T" i32 --pid $GPID 2>/dev/null)
-    if [ "$TV" = "333" ]; then TAIL="$T"; break; fi
-done
-echo "tailNode @ 0x$TAIL"
-check secret-via-chain "1337" "$($CE read "[0x$TAIL+8]+0" i32 --pid $GPID)"
-
-MIDLINK=$($CE --json pscan "0x$TAIL" --max-offset 8 --writable-only --pid $GPID 2>/dev/null | jq -r '.hits[0].base // empty' | head -1)
-MID=$(printf '%x' $(( 0x${MIDLINK#0x} - 8 )))
-BASELINK=$($CE --json pscan "0x$MID" --max-offset 8 --writable-only --pid $GPID 2>/dev/null | jq -r '.hits[0].base // empty' | head -1)
-BASE=$(printf '%x' $(( 0x${BASELINK#0x} - 8 )))
-echo "midNode @ 0x$MID   baseNode @ 0x$BASE"
+echo "== walk baseNode(111) -> midNode(222) -> tailNode(333) -> secretValue"
+find_node() { # $1=value $2=expected-next-addr(hex, empty for last) -> prints node addr
+    $CE --json scan reset --socket "$SOCK" >/dev/null
+    $CE --json scan first --type i32 --mode exact --value "$1" --writable --socket "$SOCK" >/dev/null
+    for N in $($CE --json scan list --limit 500 --sort address --socket "$SOCK" | jq -r '.rows[].address'); do
+        N=${N#0x}
+        if [ -z "$2" ]; then
+            echo "$N"; return 0
+        fi
+        NXT=$($CE read "0x$N+8" i64 --pid $GPID 2>/dev/null)
+        [ -z "$NXT" ] && continue
+        NXHEX=$(printf '%x' "$NXT" 2>/dev/null)
+        if [ "$NXHEX" = "$2" ]; then echo "$N"; return 0; fi
+    done
+    return 1
+}
+TAIL=$(find_node 333 "")
+[ -n "$TAIL" ] || { echo "FAIL tail-not-found"; FAIL=1; }
+MID=$(find_node 222 "$TAIL")
+BASE=$(find_node 111 "$MID")
+echo "base=0x$BASE mid=0x$MID tail=0x$TAIL"
+[ -n "$BASE" ] && [ -n "$MID" ] && [ -n "$TAIL" ] && pass nodes-found || failf nodes-found
 BP8=$(printf '0x%x' $(( 0x$BASE + 8 )))
-check chain-3hop "1337" "$($CE read "[${BP8}]+8]+8]+0" i32 --pid $GPID)"
+check chain-3hop   "1337" "$($CE read "[${BP8}]+8]+8]+0" i32 --pid $GPID)"
+SECP=$(printf '0x%x' $(( 0x$TAIL + 8 )))
+check chain-secret "1337" "$($CE read "[${SECP}]+0" i32 --pid $GPID)"
 
-echo "== meta ranking on last scan"
-$CE --json meta --limit 3 --socket "$SOCK" | jq -c '.top[0]'
+echo "== struct-aware meta: rescan health=100 writable, Player should be crowned"
+$CE --json scan reset --socket "$SOCK" >/dev/null
+$CE write "0x$HEALTH" i32 100 --pid $GPID >/dev/null
+$CE --json scan first --type i32 --mode exact --value 100 --writable --socket "$SOCK" >/dev/null
+META=$($CE --json meta --limit 200 --socket "$SOCK")
+echo "$META" | jq -c '.top[0]'
+echo "$META" | jq -c --arg x "0x$HEALTH" '.top[] | select(.address==$x)'
+echo "$META" | jq -r --arg x "0x$HEALTH" '[.top[].address] | index($x) != null' | grep -q true \
+    && pass meta-crowns-player || failf meta-crowns-player
+INB=$(echo "$META" | jq -r --arg x "0x$HEALTH" '.top[] | select(.address==$x) | .inboundPtrs')
+[ "${INB:-0}" -ge 1 ] && echo "PASS meta-inbound ($INB refs)" || failf meta-inbound
 $CE detach --socket "$SOCK" >/dev/null
 kill $DPID 2>/dev/null
 kill -9 $GPID 2>/dev/null

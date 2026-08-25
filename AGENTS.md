@@ -33,7 +33,9 @@ Full human docs: `docs/CLI.md`. Everything below is the cheat sheet.
 5. **Finding structs fast:** AoB signature scan beats brute narrowing, e.g.
    `scan first --type aob --mode aob --value "64 00 00 00 00 00 80 3f"`
    (int32 100 followed by float 1.0). Verify neighbors with typed reads at
-   offsets (`read 0xADDR+24 i32`).
+   offsets (`read 0xADDR+24 i32`). Then `comfy meta --json`: entries carry
+   `inboundPtrs` (references found in the whole address space) and `neighbors`
+   (field-texture score) — the real object almost always tops that ranking.
 6. **Pointer chains:** syntax `[baseExpr]+off]+off]`; every segment dereferences
    then adds off; no nesting. To follow a `next` pointer stored at node+8 start
    with `[nodeAddr+8]+0`. Invalid chains exit 6 with the syntax in the message —

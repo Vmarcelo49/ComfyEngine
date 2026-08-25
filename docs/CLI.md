@@ -92,9 +92,11 @@ Groups:
   --executable --hex --include-masked`)
 - **Watchlist**: `watch add|rm|set|freeze|script|list`, `table save|load
   [--offsets] [--activate-scripts]`
-- **Analysis**: `snapshot take|diff` `meta` (heuristic ranking; strongest on
-  float/string clusters — for int structs prefer signature scans + `pscan`
-  inbound-pointer counts) `pscan` `monitor` (NDJSON events)
+- **Analysis**: `snapshot take|diff` `meta` — struct-aware ranking: every entry
+  reports `inboundPtrs` (how many pointers target it ±64B) and `neighbors`
+  (field-texture coherence); real game objects outrank lone stack copies.
+  `scan list --sort address` gives deterministic row order. `pscan`
+  `monitor` (NDJSON events)
 - **Injection**: `aob-replace` (verify-then-patch), `aa-run <file>
   [--section enable|disable]`, `aa-store/aa-enable/aa-disable <name>`
 - **Watchpoints**: `wp start|stop|hits|list` (hardware DR0 via ce_watch helper)

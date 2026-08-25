@@ -372,11 +372,19 @@ int cmdScan(CmdCtx &ctx, Tokens &t) {
         long long limit = t.intValue("--limit").value_or(50);
         long long offset = t.intValue("--offset").value_or(0);
         bool withValues = t.has("--with-values");
-        const auto &results = s->scanner->results();
-        long long total = static_cast<long long>(results.size());
+        bool sortAddr = t.has("--sort") ? t.value("--sort") == "address" : false;
+        std::vector<core_ns::ScanResult> ordered;
+        const std::vector<core_ns::ScanResult> &results = s->scanner->results();
+        if (sortAddr) {
+            ordered = results;
+            std::sort(ordered.begin(), ordered.end(),
+                      [](const core_ns::ScanResult &a, const core_ns::ScanResult &b) { return a.address < b.address; });
+        }
+        const std::vector<core_ns::ScanResult> &view = sortAddr ? ordered : results;
+        long long total = static_cast<long long>(view.size());
         nlohmann::json arr = nlohmann::json::array();
         for (long long i = offset; i < total && i - offset < limit; ++i) {
-            const auto &r = results[static_cast<size_t>(i)];
+            const auto &r = view[static_cast<size_t>(i)];
             nlohmann::json row = {{"index", i}, {"address", addrHex(r.address)}};
             uint64_t raw = r.raw;
             if (withValues && s->target->isAttached()) {
@@ -659,6 +667,8 @@ int cmdMeta(CmdCtx &ctx, Tokens &t) {
                        {"score", ranked[i]->second.score},
                        {"guessedType", core_ns::typeToString(ranked[i]->second.guessedType)},
                        {"pointerCandidate", ranked[i]->second.pointerCandidate},
+                       {"inboundPtrs", static_cast<long long>(ranked[i]->second.inboundPointers)},
+                       {"neighbors", ranked[i]->second.neighborScore},
                        {"group", ranked[i]->second.groupLabel}});
     }
     if (ctx.out.json) {
