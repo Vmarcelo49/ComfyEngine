@@ -106,7 +106,9 @@ const CmdSpec *findSpec(const std::string &name) {
     return nullptr;
 }
 
-bool parseTypeSpec(const std::string &spec, core::ValueType &type, size_t &len, std::string &err) {
+bool parseTypeSpec(const std::string &spec, core::ValueType &type, size_t &len, std::string &err,
+                   bool *ptrOut) {
+    if (ptrOut) *ptrOut = false;
     std::string base = spec;
     len = 0;
     auto at = spec.find('@');
@@ -127,7 +129,10 @@ bool parseTypeSpec(const std::string &spec, core::ValueType &type, size_t &len, 
     else if (base == "double" || base == "f64") type = core::ValueType::Double;
     else if (base == "aob" || base == "bytes") type = core::ValueType::ArrayOfByte;
     else if (base == "string" || base == "str") type = core::ValueType::String;
-    else {
+    else if (base == "ptr" || base == "pointer") {
+        type = core::ValueType::Int64;
+        if (ptrOut) *ptrOut = true;
+    } else {
         err = "unknown type: " + base;
         return false;
     }

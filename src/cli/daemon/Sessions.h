@@ -23,6 +23,7 @@ struct WatchSessionRec {
 
 class TargetSession {
 public:
+    std::mutex mutex;
     std::string name;
     pid_t pid{-1};
     std::string procName;
@@ -37,6 +38,7 @@ public:
     std::unordered_map<std::string, bool> scriptState;
     std::unordered_map<uintptr_t, uint64_t> liveValues;
     core::ValueType resultType{core::ValueType::Int32};
+    core::ScanParams lastParams;
     std::vector<WatchSessionRec> wpSessions;
 
     ~TargetSession();

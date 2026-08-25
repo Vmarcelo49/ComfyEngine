@@ -21,8 +21,8 @@ Full human docs: `docs/CLI.md`. Everything below is the cheat sheet.
    aob-replace aa-run regions modules ps`). Anything stateful — scans,
    watchlists/freeze, tables, monitors, watchpoints — needs `comfyd &` first,
    then `comfy attach <pid|name>`.
-2. **Always pass `--json`** when scripting; outputs are single-line JSON with
-   stable keys. Errors arrive as `{"error":{code,message,hint,exit}}` on stdout
+2. **Output is JSON automatically when stdout is a pipe** (`--human` forces
+   tables). Outputs are single-line JSON with stable keys. Errors arrive as `{"error":{code,message,hint,exit}}` on stdout
    with a non-zero exit code (see `comfy schema` → exitCodes).
 3. **Scans live server-side.** `scan first|next` return only counts;
    fetch rows with `scan list --limit N [--with-values]`. Cancel with
@@ -33,7 +33,8 @@ Full human docs: `docs/CLI.md`. Everything below is the cheat sheet.
 5. **Finding structs fast:** AoB signature scan beats brute narrowing, e.g.
    `scan first --type aob --mode aob --value "64 00 00 00 00 00 80 3f"`
    (int32 100 followed by float 1.0). Verify neighbors with typed reads at
-   offsets (`read 0xADDR+24 i32`). Then `comfy meta --json`: entries carry
+   offsets (`read 0xADDR+24 i32`) or skip straight to
+   `scan first --sig "i32=100 float=1.0" --writable`. Then `comfy meta --json`: entries carry
    `inboundPtrs` (references found in the whole address space) and `neighbors`
    (field-texture score) — the real object almost always tops that ranking.
 6. **Pointer chains:** syntax `[baseExpr]+off]+off]`; every segment dereferences

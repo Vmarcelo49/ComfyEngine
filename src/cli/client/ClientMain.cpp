@@ -14,12 +14,15 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cstdio>
+
 namespace cli {
 
 namespace {
 
 struct GlobalOpts {
     bool json{false};
+    bool jsonSet{false};
     std::string socketPath{defaultSocketPath()};
 };
 
@@ -224,6 +227,10 @@ void printHelp() {
         if (c.daemonOnly) continue;
         printf("  %-12s %-40s %s\n", c.name, c.usage, c.help);
     }
+    printf("\nnotes:\n");
+    printf("  output is JSON automatically when stdout is not a TTY (--human overrides)\n");
+    printf("  types include ptr (hex-rendered i64); scans accept --sig \"i32=100 float=1.0\"\n");
+    printf("  ce_watch is the bundled hardware-watchpoint backend used by 'wp'\n");
     printf("\nbatch: comfy exec -   (NDJSON requests on stdin)\nself-description: comfy schema\n");
 }
 
@@ -238,9 +245,9 @@ void printCommandHelp(const std::string &name) {
                                                 : "direct with --pid P, or daemon session");
     struct Example { const char *cmd; const char *ex; };
     static const Example examples[] = {
-        {"read", "comfy read 0x55c0a1b2e140 i32            # scalar\ncomfy read '[0x55c00000+8]+8]+0' i32 # deref chain\ncomfy read 0x55c0a1b2e140 aob@16    # 16 bytes"},
+        {"read", "comfy read 0x55c0a1b2e140 i32            # scalar\ncomfy read '[0x55c00000+8]+8]+0' ptr # deref chain, hex value\ncomfy read 0x55c0a1b2e140 aob@16    # 16 bytes"},
         {"write", "comfy write 0x55c0a1b2e140 i32 9999 [--dry-run]"},
-        {"scan", "comfy scan first --type i32 --mode exact --value 100 [--writable]\ncomfy scan next --mode decreased --value 5\ncomfy scan list --with-values --limit 20\ncomfy scan undo | reset | cancel"},
+        {"scan", "comfy scan first --type i32 --mode exact --value 100 [--writable]\ncomfy scan first --sig \"i32=100 float=1.0\" --writable   # struct signature\ncomfy scan next --mode decreased --value 5\ncomfy scan list --with-values --limit 20 --sort address\ncomfy scan undo | reset | cancel"},
         {"watch", "comfy watch add <addr> <type> [description]\ncomfy watch list [--with-values]\ncomfy watch freeze <index> on|off\ncomfy watch set <index> <value>\ncomfy watch script <index> on|off   # toggle table scripts"},
         {"table", "comfy table save file.json [--offsets]\ncomfy table load file.json [--activate-scripts]"},
         {"monitor", "comfy monitor 0x55c0a1b2e140 i32 --interval 100   # NDJSON events until killed"},
@@ -393,7 +400,8 @@ int clientMain(int argc, char **argv) {
     std::string cmd;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--json") opts.json = true;
+        if (a == "--json") { opts.json = true; opts.jsonSet = true; }
+        else if (a == "--human") { opts.json = false; opts.jsonSet = true; }
         else if ((a == "--socket-path" || a == "--socket") && i + 1 < argc) opts.socketPath = argv[++i];
         else if ((a == "--help" || a == "-h" || a == "help") && cmd.empty()) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
@@ -413,6 +421,10 @@ int clientMain(int argc, char **argv) {
         } else {
             rest.push_back(a);
         }
+    }
+
+    if (!opts.jsonSet) {
+        opts.json = !isatty(STDOUT_FILENO);
     }
 
     if (cmd.empty()) {

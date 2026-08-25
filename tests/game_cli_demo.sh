@@ -13,6 +13,7 @@ FAIL=0
 GPID=""; DPID=""
 check() { [ "$2" = "$3" ] && echo "PASS $1" || { echo "FAIL $1: want[$2] got[$3]"; FAIL=1; }; }
 pass() { echo "PASS $1"; }
+rd() { $CE --json read "$@" | jq -r '.value'; }
 failf() { echo "FAIL $1"; FAIL=1; }
 
 pkill -f 'mini-game --allow-ptrace' 2>/dev/null
@@ -36,25 +37,25 @@ echo "== attach by name"
 $CE attach ce-mini-game --socket "$SOCK"
 
 echo "== locate Player.health via AoB signature (health=100 || speed=1.0f)"
-$CE --json scan first --type aob --mode aob --value "64 00 00 00 00 00 80 3f" --socket "$SOCK" > "$WORK/aob.json"
+$CE --json scan first --sig "i32=100 float=1.0" --writable --socket "$SOCK" > "$WORK/aob.json"
 $CE --json scan list --limit 500 --socket "$SOCK" > "$WORK/rows.json"
 echo "aob rows: $(jq '.rows | length' "$WORK/rows.json")"
 HEALTH=""
 for A in $(jq -r '.rows[].address' "$WORK/rows.json"); do A=${A#0x};
-    MO=$($CE read "0x$A+24" i32 --pid $GPID)
+    MO=$(rd "0x$A+24" i32 --pid $GPID)
     if [ "$MO" = "5000" ]; then HEALTH="$A"; break; fi
 done
 echo "Player.health @ 0x$HEALTH"
-[ -n "$HEALTH" ] && check health-initial "100" "$($CE read "0x$HEALTH" i32 --pid $GPID)" || { echo "FAIL player-locate"; FAIL=1; }
+[ -n "$HEALTH" ] && check health-initial "100" "$(rd "0x$HEALTH" i32 --pid $GPID)" || { echo "FAIL player-locate"; FAIL=1; }
 
 echo "== write + freeze"
 $CE write "0x$HEALTH" i32 9999 --pid $GPID >/dev/null
-check health-written "9999" "$($CE read "0x$HEALTH" i32 --pid $GPID)"
+check health-written "9999" "$(rd "0x$HEALTH" i32 --pid $GPID)"
 $CE watch add "0x$HEALTH" i32 hp --socket "$SOCK" >/dev/null
 $CE watch freeze 0 on --socket "$SOCK" >/dev/null
 $CE write "0x$HEALTH" i32 5 --pid $GPID >/dev/null
 sleep 0.3
-check frozen         "9999" "$($CE read "0x$HEALTH" i32 --pid $GPID)"
+check frozen         "9999" "$(rd "0x$HEALTH" i32 --pid $GPID)"
 $CE watch freeze 0 off --socket "$SOCK" >/dev/null
 $CE watch rm 0 --socket "$SOCK" >/dev/null
 
@@ -67,10 +68,12 @@ find_node() { # $1=value $2=expected-next-addr(hex, empty for last) -> prints no
         if [ -z "$2" ]; then
             echo "$N"; return 0
         fi
-        NXT=$($CE read "0x$N+8" i64 --pid $GPID 2>/dev/null)
+        NXT=$(rd "0x$N+8" ptr --pid $GPID 2>/dev/null)
         [ -z "$NXT" ] && continue
-        NXHEX=$(printf '%x' "$NXT" 2>/dev/null)
-        if [ "$NXHEX" = "$2" ]; then echo "$N"; return 0; fi
+        case "$NXT" in 0x*) ;; *) continue;; esac
+        NXDEC=$(( 0x${NXT#0x} ))
+        DEC2=$(( 0x$2 ))
+        if [ "$NXDEC" -eq "$DEC2" ]; then echo "$N"; return 0; fi
     done
     return 1
 }
@@ -81,9 +84,9 @@ BASE=$(find_node 111 "$MID")
 echo "base=0x$BASE mid=0x$MID tail=0x$TAIL"
 [ -n "$BASE" ] && [ -n "$MID" ] && [ -n "$TAIL" ] && pass nodes-found || failf nodes-found
 BP8=$(printf '0x%x' $(( 0x$BASE + 8 )))
-check chain-3hop   "1337" "$($CE read "[${BP8}]+8]+8]+0" i32 --pid $GPID)"
+check chain-3hop   "1337" "$(rd "[${BP8}]+8]+8]+0" i32 --pid $GPID)"
 SECP=$(printf '0x%x' $(( 0x$TAIL + 8 )))
-check chain-secret "1337" "$($CE read "[${SECP}]+0" i32 --pid $GPID)"
+check chain-secret "1337" "$(rd "[${SECP}]+0" i32 --pid $GPID)"
 
 echo "== struct-aware meta: rescan health=100 writable, Player should be crowned"
 $CE --json scan reset --socket "$SOCK" >/dev/null

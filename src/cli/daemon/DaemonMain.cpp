@@ -128,7 +128,14 @@ void handleRequest(int fd, const nlohmann::json &req) {
         ctx.injector = session->injector.get();
     }
 
-    bool streaming = (cmd == "monitor");
+    const bool streaming = (cmd == "monitor");
+    // Serialize session access across connections; monitors lock per-tick inside
+    // their loop so long streams don't starve other commands.
+    std::unique_lock<std::mutex> sessionLock;
+    if (session && !streaming) {
+        sessionLock = std::unique_lock<std::mutex>(session->mutex);
+    }
+
     std::thread reader;
     if (streaming) {
         int connFd = fd;

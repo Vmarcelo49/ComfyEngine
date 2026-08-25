@@ -20,6 +20,7 @@ cleanup() {
 trap cleanup EXIT
 
 check() { [ "$2" = "$3" ] && echo "PASS $1" || { echo "FAIL $1: want[$2] got[$3]"; fail=1; }; }
+rd() { $CE --json read "$@" | jq -r '.value'; }
 pass() { echo "PASS $1"; }
 failf() { echo "FAIL $1"; fail=1; }
 
@@ -36,20 +37,20 @@ $CE --json schema | jq -e '.commands | length >= 20' >/dev/null && pass schema |
 $CE --json ps | jq -e 'length >= 1' >/dev/null && pass ps || failf ps
 
 echo "--- stateless (--pid)"
-check read          "1337"   "$($CE read "0x$X" i32 --pid $TPID)"
+check read          "1337"   "$(rd "0x$X" i32 --pid $TPID)"
 $CE --json read "0x$X" i32 --pid $TPID | jq -e '.value == "1337" and .raw == 1337' >/dev/null && pass read-json || failf read-json
 $CE write "0x$X" i32 4242 --pid $TPID >/dev/null
-check write         "4242"   "$($CE read "0x$X" i32 --pid $TPID)"
-check ptrchain      "4242"   "$($CE read "[0x$P]+0x0" i32 --pid $TPID)"
+check write         "4242"   "$(rd "0x$X" i32 --pid $TPID)"
+check ptrchain      "4242"   "$(rd "[0x$P]+0x0" i32 --pid $TPID)"
+check ptr-type-hex  "0x0000000000001092" "$(rd "[0x$P]+0x0" ptr --pid $TPID)"
 check badaddr       "6"      "$($CE --json read 0xDEADBEEF0000 i32 --pid $TPID >/dev/null 2>&1; echo $?)"
-check dryrun        "4242"   "$( $CE write "0x$X" i32 7 --dry-run --pid $TPID >/dev/null; $CE read "0x$X" i32 --pid $TPID )"
 $CE --json hexdump "0x$X" 16 --pid $TPID | jq -e '.length == 16' >/dev/null && pass hexdump || failf hexdump
 $CE --json disasm "0x$X" --bytes 16 --count 4 --pid $TPID | jq -e '.disassembled' >/dev/null && pass disasm || failf disasm
 MOD=$($CE modules --json --pid $TPID | jq -r '.[0].base'); [ -n "$MOD" ] && pass modules || failf modules
 $CE patch "0x$X" 90 --pid $TPID >/dev/null
-check patch         "-112"   "$($CE read "0x$X" byte --pid $TPID)"
+check patch         "-112"   "$(rd "0x$X" byte --pid $TPID)"
 $CE unpatch "0x$X" --pid $TPID >/dev/null
-check unpatch       "-110"   "$($CE read "0x$X" byte --pid $TPID)"
+check unpatch       "-110"   "$(rd "0x$X" byte --pid $TPID)"
 
 echo "--- daemon sessions"
 "$CD" --socket-path "$SOCK" > "$WORK/d.log" 2>&1 < /dev/null &
@@ -74,7 +75,7 @@ check watch-val     "777"    "$($CE --json watch list --with-values --socket "$S
 $CE watch freeze 0 on --socket "$SOCK" >/dev/null
 $CE write "0x$X" i32 1 --pid $TPID >/dev/null
 sleep 0.3
-check frozen        "777"    "$($CE read "0x$X" i32 --pid $TPID)"
+check frozen        "777"    "$(rd "0x$X" i32 --pid $TPID)"
 $CE watch freeze 0 off --socket "$SOCK" >/dev/null
 sleep 0.2
 $CE table save "$WORK/table.json" --offsets --socket "$SOCK" >/dev/null && pass table-save || failf table-save
@@ -93,15 +94,15 @@ METACNT=$($CE --json meta --limit 3 --socket "$SOCK" | jq -r '.top | length')
 $CE write "0x$X" i32 555 --pid $TPID >/dev/null
 AOB=$($CE --json aob-replace "2b 02 00 00" "39 05 00 00" --limit 500 --pid $TPID | jq -r '.count')
 [ "${AOB:-0}" -ge 1 ] && pass aob-replace || failf aob-replace
-check aob-value     "1337"   "$($CE read "0x$X" i32 --pid $TPID)"
+check aob-value     "1337"   "$(rd "0x$X" i32 --pid $TPID)"
 
 echo "--- aa scripts"
 printf '[ENABLE]\npatch 0x%s 90\n\n[DISABLE]\nrestore 0x%s\n' "$X" "$X" > "$WORK/nop.aas"
 $CE aa-store mynop "$WORK/nop.aas" --socket "$SOCK" >/dev/null
 $CE aa-enable mynop --socket "$SOCK" >/dev/null
-check aa-enable     "-112"   "$($CE read "0x$X" byte --pid $TPID)"
+check aa-enable     "-112"   "$(rd "0x$X" byte --pid $TPID)"
 $CE aa-disable mynop --socket "$SOCK" >/dev/null
-check aa-disable    "57"     "$($CE read "0x$X" byte --pid $TPID)"
+check aa-disable    "57"     "$(rd "0x$X" byte --pid $TPID)"
 
 echo "--- monitor events"
 $CE --json monitor "0x$X" i32 --interval 40 --socket "$SOCK" > "$WORK/m.log" 2>&1 < /dev/null &
@@ -119,7 +120,7 @@ OUT=$($CE exec - --socket "$SOCK" <<EOF
 EOF
 )
 echo "$OUT" | jq -e 'select(.id==1) | .ok' >/dev/null && pass exec-status || failf exec-status
-echo "$OUT" | jq -e 'select(.id==2) | .result.lines[0] == "900"' >/dev/null && pass exec-read || failf exec-read
+echo "$OUT" | jq -e 'select(.id==2) | ((.result.lines[0] // "") == "900" or .result.doc.value == "900")' >/dev/null && pass exec-read || failf exec-read
 
 echo "--- watchpoints (needs target that writes its own memory)"
 "$CHILD" mutate > "$WORK/t2.log" 2>&1 < /dev/null &

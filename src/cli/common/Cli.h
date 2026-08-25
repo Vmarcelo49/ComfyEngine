@@ -98,7 +98,8 @@ int fail(CmdCtx &ctx, int exitCode, std::string code, std::string message, std::
 int usageError(CmdCtx &ctx, const CmdSpec &spec);
 const CmdSpec *findSpec(const std::string &name);
 std::string cacheDir();
-bool parseTypeSpec(const std::string &spec, core::ValueType &type, size_t &len, std::string &err);
+bool parseTypeSpec(const std::string &spec, core::ValueType &type, size_t &len, std::string &err,
+                   bool *ptrOut = nullptr);
 std::string trimNuls(const std::string &s);
 
 std::optional<uintptr_t> resolveAddrExpr(core::TargetProcess &proc, const std::string &expr, std::string &errOut);

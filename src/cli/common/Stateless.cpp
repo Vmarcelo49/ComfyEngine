@@ -125,7 +125,8 @@ int cmdRead(CmdCtx &ctx, Tokens &t) {
     if (!addrOpt) return fail(ctx, kExitInvalidValue, "invalid_address", err);
     core::ValueType type;
     size_t len = 0;
-    if (!parseTypeSpec(pos[1], type, len, err)) {
+    bool ptrMode = false;
+    if (!parseTypeSpec(pos[1], type, len, err, &ptrMode)) {
         return fail(ctx, kExitUsage, "invalid_type", err);
     }
 
@@ -144,6 +145,7 @@ int cmdRead(CmdCtx &ctx, Tokens &t) {
     }
     char rawHexBuf[32];
     snprintf(rawHexBuf, sizeof(rawHexBuf), "0x%016llx", static_cast<unsigned long long>(raw));
+    if (ptrMode) valueStr = rawHexBuf;
     if (ctx.out.json) {
         ctx.out.setJson({{"address", addrHex(*addrOpt)},
                          {"type", core::typeToString(type)},
@@ -166,9 +168,11 @@ int cmdWrite(CmdCtx &ctx, Tokens &t) {
     if (!addrOpt) return fail(ctx, kExitInvalidValue, "invalid_address", err);
     core::ValueType type;
     size_t ignoredLen = 0;
-    if (!parseTypeSpec(pos[1], type, ignoredLen, err)) {
+    bool writePtr = false;
+    if (!parseTypeSpec(pos[1], type, ignoredLen, err, &writePtr)) {
         return fail(ctx, kExitUsage, "invalid_type", err);
     }
+    if (writePtr) type = core::ValueType::Int64;
     std::string valueStr;
     for (size_t i = 2; i < pos.size(); ++i) {
         if (!valueStr.empty()) valueStr.push_back(' ');
@@ -181,9 +185,22 @@ int cmdWrite(CmdCtx &ctx, Tokens &t) {
     } else if (type == core::ValueType::String) {
         bytes.assign(valueStr.begin(), valueStr.end());
     } else {
-        auto parsed = core::parseScalar(valueStr, type);
-        if (!parsed) return fail(ctx, kExitInvalidValue, "invalid_value", "cannot parse '" + valueStr + "' as " + core::typeToString(type));
-        bytes = *parsed;
+        std::vector<uint8_t> parsed;
+        if (writePtr) {
+            errno = 0;
+            char *end = nullptr;
+            unsigned long long pv = std::strtoull(valueStr.c_str(), &end, 0);
+            if (end == valueStr.c_str() || *end != '\0') {
+                return fail(ctx, kExitInvalidValue, "invalid_value", "cannot parse pointer '" + valueStr + "'");
+            }
+            parsed.resize(sizeof(pv));
+            std::memcpy(parsed.data(), &pv, sizeof(pv));
+        } else {
+            auto opt = core::parseScalar(valueStr, type);
+            if (!opt) return fail(ctx, kExitInvalidValue, "invalid_value", "cannot parse '" + valueStr + "' as " + core::typeToString(type));
+            parsed = *opt;
+        }
+        bytes = parsed;
     }
     bool dryRun = t.has("--dry-run");
     if (!dryRun && !ctx.proc->writeMemory(*addrOpt, bytes.data(), bytes.size())) {

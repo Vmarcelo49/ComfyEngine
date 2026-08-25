@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -249,9 +250,41 @@ int scanFirst(TargetSession &s, CmdCtx &ctx, Tokens &t) {
     if (!parseTypeSpec(typeStr, vt, ignoredLen, err)) {
         return fail(ctx, kExitUsage, "invalid_type", err);
     }
-    params.type = vt;
-    s.resultType = vt;
-    std::string modeStr = t.value("--mode").value_or("exact");
+    if (auto sig = t.value("--sig")) {
+        std::string pattern;
+        std::istringstream ss(*sig);
+        std::string tok;
+        while (ss >> tok) {
+            auto eq = tok.find('=');
+            if (eq == std::string::npos) {
+                return fail(ctx, kExitUsage, "invalid_sig", "--sig entries look like type=value, got: " + tok);
+            }
+            core::ValueType st;
+            size_t slen = 0;
+            std::string serr;
+            bool sptr = false;
+            if (!parseTypeSpec(tok.substr(0, eq), st, slen, serr, &sptr)) {
+                return fail(ctx, kExitUsage, "invalid_sig", serr);
+            }
+            if (sptr) st = core::ValueType::Int64;
+            auto bytes = core_ns::parseScalar(tok.substr(eq + 1), st);
+            if (!bytes) return fail(ctx, kExitUsage, "invalid_sig", "bad value for " + tok.substr(0, eq));
+            for (uint8_t b : *bytes) {
+                char cell[4];
+                snprintf(cell, sizeof(cell), "%02x", b);
+                if (!pattern.empty()) pattern.push_back(' ');
+                pattern += cell;
+            }
+        }
+        params.type = core_ns::ValueType::ArrayOfByte;
+        params.mode = core_ns::ScanMode::Aob;
+        params.value1 = pattern;
+        s.resultType = params.type;
+    } else {
+        params.type = vt;
+        s.resultType = vt;
+    }
+    std::string modeStr = t.value("--mode").value_or(params.type == core_ns::ValueType::ArrayOfByte ? "aob" : "exact");
     static const std::map<std::string, core_ns::ScanMode> modes = {
         {"exact", core_ns::ScanMode::Exact},         {"unknown", core_ns::ScanMode::UnknownInitial},
         {"changed", core_ns::ScanMode::Changed},     {"unchanged", core_ns::ScanMode::Unchanged},
@@ -261,9 +294,13 @@ int scanFirst(TargetSession &s, CmdCtx &ctx, Tokens &t) {
     auto mit = modes.find(modeStr);
     if (mit == modes.end()) return fail(ctx, kExitUsage, "invalid_mode", "unknown mode: " + modeStr);
     params.mode = mit->second;
-    params.value1 = t.value("--value").value_or("");
-    params.value2 = t.value("--value2").value_or("");
-    if ((params.mode == core_ns::ScanMode::Exact || params.mode == core_ns::ScanMode::Aob ||
+    const bool sigMode = t.has("--sig");
+    if (!sigMode) {
+        params.value1 = t.value("--value").value_or("");
+        params.value2 = t.value("--value2").value_or("");
+    }
+    if (!sigMode &&
+        (params.mode == core_ns::ScanMode::Exact || params.mode == core_ns::ScanMode::Aob ||
          params.mode == core_ns::ScanMode::GreaterThan || params.mode == core_ns::ScanMode::LessThan ||
          params.mode == core_ns::ScanMode::Between) &&
         params.value1.empty() && params.mode != core_ns::ScanMode::UnknownInitial) {
@@ -278,6 +315,7 @@ int scanFirst(TargetSession &s, CmdCtx &ctx, Tokens &t) {
 
     s.scanHistory.clear();
     s.liveValues.clear();
+    s.lastParams = params;
     bool ok = s.scanner->firstScan(params);
     if (!ok) {
         return fail(ctx, kExitCancelled, "scan_failed",
@@ -315,6 +353,10 @@ int scanNext(TargetSession &s, CmdCtx &ctx, Tokens &t) {
          params.mode == core_ns::ScanMode::LessThan || params.mode == core_ns::ScanMode::Between)) {
         return fail(ctx, kExitUsage, "missing_value", "--value is required for this mode");
     }
+    if (!t.has("--mode") && !t.has("--sig")) {
+        // keep prior type semantics; nothing to do
+    }
+    s.lastParams = params;
 
     bool ok = s.scanner->nextScan(params);
     if (!ok) {
@@ -388,6 +430,21 @@ int cmdScan(CmdCtx &ctx, Tokens &t) {
             nlohmann::json row = {{"index", i}, {"address", addrHex(r.address)}};
             uint64_t raw = r.raw;
             if (withValues && s->target->isAttached()) {
+                if (s->resultType == core_ns::ValueType::ArrayOfByte ||
+                    s->resultType == core_ns::ValueType::String) {
+                    size_t want = 16;
+                    if (s->resultType == core_ns::ValueType::ArrayOfByte) {
+                        std::istringstream pat(s->lastParams.value1);
+                        want = std::max<size_t>(std::distance(std::istream_iterator<std::string>(pat),
+                                                              std::istream_iterator<std::string>()), 1);
+                    }
+                    std::vector<uint8_t> buf(want);
+                    if (s->target->readMemory(r.address, buf.data(), buf.size())) {
+                        row["value"] = core_ns::formatValueBytes(buf.data(), buf.size(), s->resultType);
+                    }
+                    arr.push_back(row);
+                    continue;
+                }
                 std::vector<uint8_t> buf;
                 if (core_ns::readScalar(*s->target, r.address, s->resultType, buf)) {
                     std::memcpy(&raw, buf.data(), std::min(buf.size(), sizeof(uint64_t)));
@@ -448,6 +505,12 @@ int cmdWatch(CmdCtx &ctx, Tokens &t) {
         return kExitOk;
     }
     if (sub == "rm" || sub == "remove" || sub == "delete") {
+        if (pos.size() >= 2 && pos[1] == "all") {
+            table->setEntries({});
+            s->updateFreezePump();
+            if (ctx.out.json) ctx.out.setJson({{"removed", "all"}});
+            return kExitOk;
+        }
         long long idx = 0;
         if (pos.size() < 2 || (idx = std::strtoll(pos[1].c_str(), nullptr, 10)) < 0) {
             return usageError(ctx, *findSpec("watch"));
@@ -706,6 +769,7 @@ int cmdMonitor(CmdCtx &ctx, Tokens &t) {
     if (readLen == 0) readLen = len;
     std::vector<uint8_t> last;
     {
+        std::lock_guard<std::mutex> lk(s->mutex);
         std::vector<uint8_t> buf(readLen);
         if (s->target->readMemory(*addrOpt, buf.data(), buf.size())) last = buf;
     }
@@ -716,7 +780,10 @@ int cmdMonitor(CmdCtx &ctx, Tokens &t) {
     while (!ctx.stopFlag->load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(intervalMs)));
         std::vector<uint8_t> cur(readLen);
-        if (!s->target->readMemory(*addrOpt, cur.data(), cur.size())) continue;
+        {
+            std::lock_guard<std::mutex> lk(s->mutex);
+            if (!s->target->readMemory(*addrOpt, cur.data(), cur.size())) continue;
+        }
         if (cur == last) continue;
         nlohmann::json ev = {{"event", "monitor.change"},
                              {"address", addrHex(*addrOpt)},
