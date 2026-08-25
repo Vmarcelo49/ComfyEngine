@@ -90,7 +90,8 @@ Groups:
   byte|i16|i32|i64|float|double|aob|string`, `--mode exact|unknown|changed|
   unchanged|increased|decreased|gt|lt|between|aob`, `--align --writable
   --executable --hex --include-masked`)
-- **Watchlist**: `watch add|rm|set|freeze|script|list`, `table save|load
+- **Watchlist**: `watch add|rm|set|freeze|script|list` (`rm all` clears),
+  `table save|load
   [--offsets] [--activate-scripts]`
 - **Analysis**: `snapshot take|diff` `meta` — struct-aware ranking: every entry
   reports `inboundPtrs` (how many pointers target it ±64B) and `neighbors`
@@ -103,7 +104,11 @@ Groups:
 
 Address expressions: hex `0x…`, decimal, `module+offset`, pointer chains
 `[base]+0x10]+off]` (final `]` optional). Types accept `@len` for variable-size
-reads (`aob@32`, `string@64`).
+reads (`aob@32`, `string@64`) plus `ptr` — a 64-bit pointer read/write whose
+value renders as hex (ideal for walking linked structures). Struct signatures:
+`scan first --sig "i32=100 float=1.0" --writable` builds the AoB pattern from
+typed key=value pairs. Output is JSON automatically when stdout is not a TTY
+(`--human` forces tables; `--json` accepted in any position).
 
 ## Agent contract
 

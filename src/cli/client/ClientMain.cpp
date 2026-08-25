@@ -285,7 +285,7 @@ void printSchema() {
         {"protocol",
          "NDJSON over unix socket; request {id,cmd,tokens}, response {id,ok,result|error}"},
         {"commands", commands},
-        {"valueTypes", {"byte", "i16", "i32", "i64", "float", "double", "aob@N", "string@N"}},
+        {"valueTypes", {"byte", "i16", "i32", "i64", "float", "double", "aob@N", "string@N", "ptr"}},
         {"scanModes", {"exact", "unknown", "changed", "unchanged", "increased", "decreased",
                        "gt", "lt", "between", "aob"}},
         {"addressExpressions", "hex 0x... | decimal | module+offset | [base]+off]+off] pointer chains"},

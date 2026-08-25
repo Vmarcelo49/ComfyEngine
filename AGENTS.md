@@ -40,13 +40,15 @@ Full human docs: `docs/CLI.md`. Everything below is the cheat sheet.
 6. **Pointer chains:** syntax `[baseExpr]+off]+off]`; every segment dereferences
    then adds off; no nesting. To follow a `next` pointer stored at node+8 start
    with `[nodeAddr+8]+0`. Invalid chains exit 6 with the syntax in the message —
-   debug hop-by-hop with plain reads.
+   debug hop-by-hop with plain reads. Read links as `read <expr> ptr` to get
+   hex-rendered pointer values instead of giant decimals.
 7. **Who points here?** `pscan <addr> --max-offset N [--writable-only]`
    returns inbound pointers `{base, offset, final}` — perfect for backtracking
    linked structures or finding stable paths to a dynamic address.
 8. **Freeze = watchlist entry.** `watch add <addr> <type> [desc]`,
    `watch freeze <index> on`, enforcement runs at 50 ms inside comfyd and
    survives client disconnects. Prove it: corrupt externally, re-read.
+   Clear everything with `watch rm all`.
 9. **Persist work:** `table save f.json --offsets` / `table load f.json`.
    Auto Assembler scripts: `aa-store name file` → `aa-enable name` /
    `aa-disable name` (undo-safe via recorded originals).
