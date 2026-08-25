@@ -55,6 +55,10 @@ struct MetaOptions {
     bool enableInbound{true};
     uintptr_t inboundWindow{64};
     double inboundWeight{12.0};
+    size_t inboundCap{8};
+    double structCorroborationBonus{10.0};
+    double corroborationMinNeighbors{4.0};
+    size_t corroborationMinRefs{2};
     size_t neighborBytes{64};
     double neighborWeight{2.0};
 };

@@ -172,10 +172,16 @@ std::unordered_map<uintptr_t, MetaEntry> analyzeMetaResults(TargetProcess &proc,
             if (it != inbound.end()) refs = it->second;
         }
         entry.inboundPointers = refs;
-        score += options.inboundWeight * std::log2(1.0 + static_cast<double>(refs));
+        size_t capped = std::min(refs, options.inboundCap);
+        score += options.inboundWeight * std::log2(1.0 + static_cast<double>(capped));
 
         entry.neighborScore = neighborCoherence(proc, addr, index, options.neighborBytes);
         score += options.neighborWeight * entry.neighborScore;
+
+        if (refs >= options.corroborationMinRefs &&
+            entry.neighborScore >= options.corroborationMinNeighbors) {
+            score += options.structCorroborationBonus;
+        }
 
         size_t align = defaultAlignment(displayType);
         if (align > 1 && addr % align == 0) score += options.alignmentBonus;

@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 
@@ -450,7 +451,14 @@ int clientMain(int argc, char **argv) {
     if (!spec) {
         CmdCtx ctx;
         ctx.out.json = opts.json;
-        fail(ctx, kExitUsage, "unknown_command", "unknown command '" + cmd + "' (see comfy help)");
+        std::string hint = "see comfy help";
+        for (const auto &c : registry()) {
+            if (strstr(c.usage, cmd.c_str()) || strstr(c.help, cmd.c_str())) {
+                hint = std::string("did you mean '") + c.name + "'? e.g. comfy " + c.name + " " + c.usage;
+                break;
+            }
+        }
+        fail(ctx, kExitUsage, "unknown_command", "unknown command '" + cmd + "'", hint);
         emit(opts, ctx);
         return kExitUsage;
     }

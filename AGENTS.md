@@ -40,8 +40,8 @@ Full human docs: `docs/CLI.md`. Everything below is the cheat sheet.
 6. **Pointer chains:** syntax `[baseExpr]+off]+off]`; every segment dereferences
    then adds off; no nesting. To follow a `next` pointer stored at node+8 start
    with `[nodeAddr+8]+0`. Invalid chains exit 6 with the syntax in the message —
-   debug hop-by-hop with plain reads. Read links as `read <expr> ptr` to get
-   hex-rendered pointer values instead of giant decimals.
+   debug with `comfy walk '[b]+8]+8]+0' ptr` — prints every hop. Read links
+   as `read <expr> ptr` for hex-rendered pointer values.
 7. **Who points here?** `pscan <addr> --max-offset N [--writable-only]`
    returns inbound pointers `{base, offset, final}` — perfect for backtracking
    linked structures or finding stable paths to a dynamic address.

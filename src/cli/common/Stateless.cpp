@@ -557,6 +557,75 @@ int cmdAobReplace(CmdCtx &ctx, Tokens &t) {
     return kExitOk;
 }
 
+int cmdWalk(CmdCtx &ctx, Tokens &t) {
+    int rc = requireProc(ctx);
+    if (rc != kExitOk) return rc;
+    auto pos = t.positionals();
+    if (pos.empty()) return usageError(ctx, *findSpec("walk"));
+    const std::string &expr = pos[0];
+    if (expr.empty() || expr[0] != '[') {
+        return fail(ctx, kExitUsage, "invalid_address",
+                    "walk expects a pointer chain starting with '['");
+    }
+    size_t close = expr.find(']');
+    if (close == std::string::npos) {
+        return fail(ctx, kExitInvalidValue, "invalid_address", "missing ']' in chain base");
+    }
+    std::string baseErr;
+    auto baseOpt = resolveAddrExpr(*ctx.proc, expr.substr(1, close - 1), baseErr);
+    if (!baseOpt) return fail(ctx, kExitInvalidValue, "invalid_address", baseErr);
+
+    nlohmann::json hops = nlohmann::json::array();
+    uintptr_t current = *baseOpt;
+    hops.push_back({{"hop", 0}, {"address", addrHex(current)}, {"note", "base"}});
+    size_t i = close + 1;
+    int hop = 0;
+    while (i < expr.size()) {
+        if (expr[i] != '+') {
+            return fail(ctx, kExitInvalidValue, "invalid_address",
+                        "expected '+offset' at position " + std::to_string(i));
+        }
+        size_t j = i + 1;
+        while (j < expr.size() && expr[j] != ']') ++j;
+        bool hadClose = j < expr.size();
+        std::string offStr = expr.substr(i + 1, (hadClose ? j : expr.size()) - i - 1);
+        errno = 0;
+        char *end = nullptr;
+        long long off = std::strtoll(offStr.c_str(), &end, 0);
+        if (offStr.empty() || end == offStr.c_str() || *end != '\0') {
+            return fail(ctx, kExitInvalidValue, "invalid_address", "bad offset '" + offStr + "'");
+        }
+        uintptr_t pointed = 0;
+        if (!ctx.proc->readMemory(current, &pointed, sizeof(pointed))) {
+            return fail(ctx, kExitTargetGone, "walk_failed",
+                        "hop " + std::to_string(hop + 1) + ": cannot read pointer at " + addrHex(current),
+                        "verify the previous hop's address with 'comfy read'");
+        }
+        ++hop;
+        current = pointed + static_cast<uintptr_t>(off);
+        hops.push_back({{"hop", hop},
+                        {"deref", addrHex(pointed)},
+                        {"plusOffset", off},
+                        {"address", addrHex(current)}});
+        i = hadClose ? j + 1 : j;
+    }
+    if (ctx.out.json) {
+        ctx.out.setJson({{"resolved", addrHex(current)}, {"hops", hops}});
+    } else {
+        for (const auto &h : hops) {
+            std::string line = "hop " + std::to_string(h["hop"].get<int>()) + ": ";
+            if (h.contains("deref")) {
+                line += "*(" + h["deref"].get<std::string>() + ") +" +
+                        std::to_string(h["plusOffset"].get<long long>()) + " -> ";
+            }
+            line += h["address"].get<std::string>();
+            ctx.out.line(line);
+        }
+        ctx.out.line("resolved: " + addrHex(current));
+    }
+    return kExitOk;
+}
+
 int cmdAaRun(CmdCtx &ctx, Tokens &t) {
     int rc = requireProc(ctx);
     if (rc != kExitOk) return rc;
@@ -635,6 +704,7 @@ void registerStatelessCommands(std::vector<CmdSpec> &cmds) {
     cmds.push_back({"pscan", "<addr> --max-offset N [--writable-only]", "single-level pointer scan", false, cmdPscan});
     cmds.push_back({"aob-replace", "<pattern> <hexbytes...> [--limit N]", "verify-then-patch all AoB matches", false, cmdAobReplace});
     cmds.push_back({"aa-run", "<file> [--section enable|disable]", "run an Auto Assembler script", false, cmdAaRun});
+    cmds.push_back({"walk", "[base]+off]+off]", "resolve a pointer chain verbosely, printing every hop", false, cmdWalk});
 }
 
 } // namespace cli

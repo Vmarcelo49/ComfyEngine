@@ -37,14 +37,20 @@ $ comfy read '[0x55c00000+8]+8]+0' i32     # hop: read(0x55c00008) -> +8 -> read
 ```
 
 Invalid chains exit 6 and the error message repeats this syntax plus the exact
-problem. Verify each hop interactively with plain `comfy read` when debugging.
+problem. `comfy walk '[base]+8]+8]+0' ptr` resolves verbosely, printing every
+hop — use it to debug chains instead of manual step-by-step reads.
 
 ## Sample game (headless demo)
 
 ```console
-$ QT_QPA_PLATFORM=offscreen ./build/testgame/ce-mini-game --allow-ptrace &
-$ comfyd & $ comfy attach ce-mini-game
+$ setsid env QT_QPA_PLATFORM=offscreen ./build/testgame/ce-mini-game \
+    --allow-ptrace </dev/null >/tmp/game.log 2>&1 &
+$ setsid comfyd </dev/null >/tmp/comfyd.log 2>&1 &
+$ comfy attach ce-mini-game
 ```
+
+(`setsid env VAR=x cmd &` detaches fully so background jobs never hold your
+shell; record `$!` for cleanup.)
 
 The game exposes static globals (health=100 i32, speed=1.0f, stamina=75.0,
 ammo=30, grenades=3, money=5000) plus a 3-node pointer chain
