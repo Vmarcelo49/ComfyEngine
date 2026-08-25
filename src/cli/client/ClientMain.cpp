@@ -227,6 +227,44 @@ void printHelp() {
     printf("\nbatch: comfy exec -   (NDJSON requests on stdin)\nself-description: comfy schema\n");
 }
 
+void printCommandHelp(const std::string &name) {
+    const CmdSpec *spec = findSpec(name);
+    if (!spec) {
+        printf("unknown command '%s'\n", name.c_str());
+        return;
+    }
+    printf("%s - %s\n\nusage: comfy [flags] %s %s\n", spec->name, spec->help, spec->name, spec->usage);
+    printf("mode: %s\n\n", spec->daemonOnly ? "daemon session required"
+                                                : "direct with --pid P, or daemon session");
+    struct Example { const char *cmd; const char *ex; };
+    static const Example examples[] = {
+        {"read", "comfy read 0x55c0a1b2e140 i32            # scalar\ncomfy read '[0x55c00000+8]+8]+0' i32 # deref chain\ncomfy read 0x55c0a1b2e140 aob@16    # 16 bytes"},
+        {"write", "comfy write 0x55c0a1b2e140 i32 9999 [--dry-run]"},
+        {"scan", "comfy scan first --type i32 --mode exact --value 100 [--writable]\ncomfy scan next --mode decreased --value 5\ncomfy scan list --with-values --limit 20\ncomfy scan undo | reset | cancel"},
+        {"watch", "comfy watch add <addr> <type> [description]\ncomfy watch list [--with-values]\ncomfy watch freeze <index> on|off\ncomfy watch set <index> <value>\ncomfy watch script <index> on|off   # toggle table scripts"},
+        {"table", "comfy table save file.json [--offsets]\ncomfy table load file.json [--activate-scripts]"},
+        {"monitor", "comfy monitor 0x55c0a1b2e140 i32 --interval 100   # NDJSON events until killed"},
+        {"wp", "comfy wp start <addr> write|access [1|2|4|8] [--name N]\ncomfy wp hits [--name N]\ncomfy wp list | stop [--name N]"},
+        {"pscan", "comfy pscan 0x55c0a1b2e140 --max-offset 4096 [--writable-only]"},
+        {"disasm", "comfy disasm 0x401000 --bytes 128 --count 20"},
+        {"patch", "comfy patch 0x401000 90 90 90   # recorded; undo: comfy unpatch 0x401000"},
+        {"aa-run", "comfy aa-run script.txt [--section disable]"},
+    };
+    for (const auto &e : examples) {
+        if (name == e.cmd) printf("\nexamples:\n%s\n", e.ex);
+    }
+    if (name == "read") {
+        printf("\naddress expressions:\n"
+               "  0x55c0a1b2e140        literal\n"
+               "  12345                 decimal literal\n"
+               "  gamelib.so+0x1234     module base + offset\n"
+               "  0x55c00000+24         arithmetic\n"
+               "  [expr]+off]+off]      pointer chain: start at expr, then each\n"
+               "                        segment dereferences the current pointer\n"
+               "                        and adds off. Nesting [[..]] is invalid.\n");
+    }
+}
+
 void printSchema() {
     nlohmann::json commands = nlohmann::json::array();
     for (const auto &c : registry()) {
@@ -357,10 +395,14 @@ int clientMain(int argc, char **argv) {
         std::string a = argv[i];
         if (a == "--json") opts.json = true;
         else if ((a == "--socket-path" || a == "--socket") && i + 1 < argc) opts.socketPath = argv[++i];
-        else if (a == "--help" || a == "-h" || a == "help") {
-            printHelp();
+        else if ((a == "--help" || a == "-h" || a == "help") && cmd.empty()) {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                printCommandHelp(argv[i + 1]);
+            } else {
+                printHelp();
+            }
             return kExitOk;
-        } else if (a == "schema") {
+        } else if (a == "schema" && cmd.empty()) {
             printSchema();
             return kExitOk;
         } else if (a == "--version" || a == "version") {
@@ -384,6 +426,11 @@ int clientMain(int argc, char **argv) {
         }
         fprintf(stderr, "usage: comfy exec -\n");
         return kExitUsage;
+    }
+
+    if (!rest.empty() && (rest[0] == "--help" || rest[0] == "-h" || rest[0] == "help")) {
+        printCommandHelp(cmd);
+        return kExitOk;
     }
 
     Tokens tokens(rest);

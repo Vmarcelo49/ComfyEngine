@@ -142,11 +142,14 @@ int cmdRead(CmdCtx &ctx, Tokens &t) {
         std::memcpy(&raw, scalar.data(), scalar.size());
         valueStr = core::formatRawValue(raw, type);
     }
+    char rawHexBuf[32];
+    snprintf(rawHexBuf, sizeof(rawHexBuf), "0x%016llx", static_cast<unsigned long long>(raw));
     if (ctx.out.json) {
         ctx.out.setJson({{"address", addrHex(*addrOpt)},
                          {"type", core::typeToString(type)},
                          {"value", valueStr},
-                         {"raw", raw}});
+                         {"raw", raw},
+                         {"rawHex", rawHexBuf}});
     } else {
         ctx.out.line(valueStr);
     }

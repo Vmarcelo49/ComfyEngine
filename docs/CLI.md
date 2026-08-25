@@ -25,10 +25,36 @@ watchlists with freeze enforcement, hardware watchpoints. Start it manually; sto
 with `kill <pid>` or `pkill comfyd`. Socket default:
 `$XDG_CACHE_HOME/comfyengine/comfy.sock` (mode 0600).
 
+## Pointer chains
+
+Syntax: `[baseExpr]+off]+off]` — `baseExpr` is any address expression (literal,
+`module+offset`, even `0x…+24`). Each `+off]` segment **dereferences the current
+pointer, then adds off**. Nesting (`[[..]]`) is invalid. Example walk of
+`node->next->next->value_ptr`:
+
+```console
+$ comfy read '[0x55c00000+8]+8]+0' i32     # hop: read(0x55c00008) -> +8 -> read -> +0
+```
+
+Invalid chains exit 6 and the error message repeats this syntax plus the exact
+problem. Verify each hop interactively with plain `comfy read` when debugging.
+
+## Sample game (headless demo)
+
+```console
+$ QT_QPA_PLATFORM=offscreen ./build/testgame/ce-mini-game --allow-ptrace &
+$ comfyd & $ comfy attach ce-mini-game
+```
+
+The game exposes static globals (health=100 i32, speed=1.0f, stamina=75.0,
+ammo=30, grenades=3, money=5000) plus a 3-node pointer chain
+(values 111→222→333) whose last `next` targets `secretValue=1337`.
+`ce-mini-game --help` lists its flags.
+
 ## Quickstart (agent-flavored)
 
 ```console
-$ PID=$(comfy --json ps | jq -r '.[] | select(.name=="testgame") | .pid')
+$ PID=$(comfy --json ps | jq -r '.[] | select(.name=="ce-mini-game") | .pid')
 $ comfyd &                       # once per boot
 $ comfy attach $PID
 $ comfy --json scan first --type i32 --mode exact --value 100
@@ -66,7 +92,9 @@ Groups:
   --executable --hex --include-masked`)
 - **Watchlist**: `watch add|rm|set|freeze|script|list`, `table save|load
   [--offsets] [--activate-scripts]`
-- **Analysis**: `snapshot take|diff` `meta` `pscan` `monitor` (NDJSON events)
+- **Analysis**: `snapshot take|diff` `meta` (heuristic ranking; strongest on
+  float/string clusters — for int structs prefer signature scans + `pscan`
+  inbound-pointer counts) `pscan` `monitor` (NDJSON events)
 - **Injection**: `aob-replace` (verify-then-patch), `aa-run <file>
   [--section enable|disable]`, `aa-store/aa-enable/aa-disable <name>`
 - **Watchpoints**: `wp start|stop|hits|list` (hardware DR0 via ce_watch helper)

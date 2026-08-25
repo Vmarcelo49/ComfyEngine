@@ -163,6 +163,14 @@ private:
 
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--help" || std::string(argv[i]) == "-h") {
+            printf("ce-mini-game - ComfyEngine sample target\n\n"
+                   "usage: ce-mini-game [--allow-ptrace]\n\n"
+                   "  --allow-ptrace    call PR_SET_PTRACER(PR_SET_PTRACER_ANY) so tools like\n"
+                   "                    ComfyEngine can access this process's memory even under\n"
+                   "                    yama ptrace_scope=1. Use for demos/tests only.\n");
+            return 0;
+        }
         if (std::string(argv[i]) == "--allow-ptrace") {
             prctl(PR_SET_PTRACER, -1UL);
         }

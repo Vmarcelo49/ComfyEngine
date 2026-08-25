@@ -186,10 +186,14 @@ std::optional<uintptr_t> resolveAddrExpr(core::TargetProcess &proc, const std::s
         return std::nullopt;
     }
 
+    static const char kChainSyntax[] =
+        "pointer-chain syntax: [baseExpr]+off]+off]  - each segment dereferences "
+        "the current pointer then adds off; baseExpr may be an address or "
+        "addr+offset; nesting [[..]] is invalid. Example: '[0x55c00000+8]+8]+0'";
     if (expr[0] == '[') {
         size_t close = expr.find(']');
         if (close == std::string::npos) {
-            errOut = "unterminated pointer chain bracket";
+            errOut = std::string(kChainSyntax) + " -- problem: missing ']'";
             return std::nullopt;
         }
         std::string baseStr = expr.substr(1, close - 1);
@@ -199,7 +203,7 @@ std::optional<uintptr_t> resolveAddrExpr(core::TargetProcess &proc, const std::s
         size_t i = close + 1;
         while (i < expr.size()) {
             if (expr[i] != '+') {
-                errOut = "expected +offset in pointer chain at position " + std::to_string(i);
+                errOut = std::string(kChainSyntax) + " -- problem: expected '+offset' at position " + std::to_string(i);
                 return std::nullopt;
             }
             size_t j = i + 1;
@@ -210,12 +214,13 @@ std::optional<uintptr_t> resolveAddrExpr(core::TargetProcess &proc, const std::s
             char *end = nullptr;
             long long off = std::strtoll(offStr.c_str(), &end, 0);
             if (offStr.empty() || end == offStr.c_str() || *end != '\0') {
-                errOut = "invalid pointer chain offset: " + offStr;
+                errOut = std::string(kChainSyntax) + " -- problem: bad offset '" + offStr + "'";
                 return std::nullopt;
             }
             uintptr_t pointed = 0;
             if (!proc.readMemory(current, &pointed, sizeof(pointed))) {
-                errOut = "failed to read pointer at " + addrHex(current);
+                errOut = "failed to read pointer at " + addrHex(current) +
+                         " (chain so far resolved to an unreadable address; verify each hop with 'comfy read')";
                 return std::nullopt;
             }
             current = pointed + static_cast<uintptr_t>(off);

@@ -132,15 +132,32 @@ int cmdAttach(CmdCtx &ctx, Tokens &t) {
         unsigned long long v = std::stoull(pos[0], nullptr, 10);
         pid = static_cast<pid_t>(v);
     } catch (...) {
+        pid_t self = getpid();
+        const core_ns::ProcessInfo *exact = nullptr;
+        const core_ns::ProcessInfo *byName = nullptr;
+        const core_ns::ProcessInfo *byCmdline = nullptr;
+        size_t nameMatches = 0;
         for (const auto &p : core_ns::ProcessEnumerator::list()) {
-            if (p.name == pos[0] || p.name.find(pos[0]) != std::string::npos ||
-                p.cmdline.find(pos[0]) != std::string::npos) {
-                pid = p.pid;
-                procName = p.name;
-                break;
+            if (p.pid == self || p.pid <= 0) continue;
+            if (p.name == pos[0]) {
+                if (!exact || p.pid > exact->pid) exact = &p;
+            } else if (p.name.find(pos[0]) != std::string::npos) {
+                ++nameMatches;
+                if (!byName || p.pid > byName->pid) byName = &p;
+            } else if (!byCmdline && p.cmdline.find(pos[0]) != std::string::npos) {
+                byCmdline = &p;
             }
         }
-        if (pid == 0) return fail(ctx, kExitNoTarget, "process_not_found", "no process matching '" + pos[0] + "'");
+        const core_ns::ProcessInfo *best = exact ? exact : (byName ? byName : byCmdline);
+        if (!best) {
+            return fail(ctx, kExitNoTarget, "process_not_found", "no process matching '" + pos[0] + "'");
+        }
+        pid = best->pid;
+        procName = best->name;
+        if (!exact && byName && ctx.out.json) {
+            ctx.out.setJson({{"note", "matched by substring; use the exact process name to be precise"},
+                             {"alternatives", static_cast<long long>(nameMatches)}});
+        }
     }
     if (procName.empty()) {
         for (const auto &p : core_ns::ProcessEnumerator::list()) {

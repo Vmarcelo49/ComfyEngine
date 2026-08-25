@@ -31,7 +31,7 @@ disown
 for i in $(seq 1 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
 
 echo "== attach by name"
-$CE attach ce-mini --socket "$SOCK"
+$CE attach ce-mini-game --socket "$SOCK"
 
 echo "== locate Player.health via AoB signature (health=100 || speed=1.0f)"
 $CE --json scan first --type aob --mode aob --value "64 00 00 00 00 00 80 3f" --socket "$SOCK" > "$WORK/aob.json"
