@@ -9,8 +9,11 @@
 #include <QTimer>
 #include <QString>
 #include <cstdlib>
+#include <cstring>
 #include <atomic>
 #include <random>
+
+#include <sys/prctl.h>
 
 struct Inventory {
     volatile int ammo{30};
@@ -159,6 +162,11 @@ private:
 };
 
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--allow-ptrace") {
+            prctl(PR_SET_PTRACER, -1UL);
+        }
+    }
     QApplication app(argc, argv);
     GameWidget w;
     w.setWindowTitle("ComfyEngine Mini Tutorial Game");

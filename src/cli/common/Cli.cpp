@@ -236,20 +236,29 @@ std::optional<uintptr_t> resolveAddrExpr(core::TargetProcess &proc, const std::s
     size_t pos = std::min(posPlus == std::string::npos ? expr.size() : posPlus,
                           posMinus == std::string::npos ? expr.size() : posMinus);
     std::string name = expr.substr(0, pos);
-    static bool cached = false;
-    static std::unordered_map<std::string, uintptr_t> cachedMods;
-    static pid_t cachedPid = -1;
-    if (!cached || cachedPid != proc.pid()) {
-        cachedMods = moduleBases(proc);
-        cachedPid = proc.pid();
-        cached = true;
+    uintptr_t base = 0;
+    errno = 0;
+    char *numEnd = nullptr;
+    unsigned long long numVal = std::strtoull(name.c_str(), &numEnd, 0);
+    bool numOk = !name.empty() && numEnd == name.c_str() + name.size();
+    if (numOk) {
+        base = static_cast<uintptr_t>(numVal);
+    } else {
+        static bool cached = false;
+        static std::unordered_map<std::string, uintptr_t> cachedMods;
+        static pid_t cachedPid = -1;
+        if (!cached || cachedPid != proc.pid()) {
+            cachedMods = moduleBases(proc);
+            cachedPid = proc.pid();
+            cached = true;
+        }
+        auto it = cachedMods.find(name);
+        if (it == cachedMods.end()) {
+            errOut = "unknown symbol or invalid address: " + name;
+            return std::nullopt;
+        }
+        base = it->second;
     }
-    auto it = cachedMods.find(name);
-    if (it == cachedMods.end()) {
-        errOut = "unknown symbol or invalid address: " + name;
-        return std::nullopt;
-    }
-    uintptr_t base = it->second;
     int64_t offset = 0;
     if (pos < expr.size()) {
         std::string offStr = expr.substr(pos);

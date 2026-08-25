@@ -133,7 +133,12 @@ std::vector<MemoryRegion> TargetProcess::regions() const {
         std::string range, perms, offset, dev, inode, pathName;
         if (!(iss >> range >> perms >> offset >> dev >> inode)) continue;
         std::getline(iss, pathName);
-        if (!pathName.empty() && pathName[0] == ' ') pathName.erase(0, 1);
+        while (!pathName.empty() && isspace(static_cast<unsigned char>(pathName.front()))) {
+            pathName.erase(0, 1);
+        }
+        while (!pathName.empty() && isspace(static_cast<unsigned char>(pathName.back()))) {
+            pathName.pop_back();
+        }
         auto dash = range.find('-');
         if (dash == std::string::npos) continue;
         uintptr_t start = std::stoull(range.substr(0, dash), nullptr, 16);

@@ -186,8 +186,12 @@ int daemonMain(int argc, char **argv) {
         }
     }
 
-    signal(SIGINT, onSignal);
-    signal(SIGTERM, onSignal);
+    struct sigaction sa {};
+    sa.sa_handler = onSignal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
     signal(SIGPIPE, SIG_IGN);
 
     int server = socket(AF_UNIX, SOCK_STREAM, 0);
