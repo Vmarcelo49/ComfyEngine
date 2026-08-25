@@ -197,7 +197,7 @@ Non-script entry:
 
 Script entry keys: `isScript: true`, `description`, `script` (full AA text incl. `[ENABLE]/[DISABLE]`), `active` (written :2128–2132 but **ignored on load** — always restored inactive, :2173–2180).
 
-⚠️ Pointer-entry `offsets` are **not persisted** today. CLI tables should add an `offsets` array (backward compatible: absent = empty) and fix the GUI loader to use it when present.
+⚠️ Pointer-entry `offsets` are **not persisted** today. **Decision (quirk policy = preserve + opt-in flags):** default behavior stays byte-compatible with the GUI; `comfy table save --offsets` additionally writes an `offsets` array (GUI loader ignores unknown keys, so this is safe), and a future GUI loader fix can consume it when present. Similarly, `comfy table load --activate-scripts` opts into honoring the stored `active` flag instead of the GUI's always-inactive restore.
 
 File filter in GUI: "Cheat Tables (*.json)".
 
@@ -248,9 +248,9 @@ Components:
    - `core/Analysis.{h,cpp}` — meta-scoring heuristics + snapshot/track-changes diffing + spike detection thresholds (parameterized, defaults = GUI values).
    - `core/Disassembler.{h,cpp}` — capstone x86-64 wrapper; graceful degradation without capstone.
    - Move `PointerScanner`/`PointerHit` files from `gui/` → `core/` (no code change beyond includes).
-   - `core/Json.h` — minimal JSON writer/parser for tables & IPC (hand-rolled ~300 lines or vendored single-header nlohmann — decision point P0; format is tiny enough either way, escaping correctness is the only risk).
+   - `core/Json.h` — JSON for tables & IPC via **vendored nlohmann single-header** in `third_party/` (decision locked; robust escaping/parsing, no build system changes beyond include path).
 
-2. **`comfyd` (daemon, `src/cli/daemon/`):** owns sessions; unix socket (default `$XDG_CACHE_HOME/comfyengine/comfy.sock`, mode 0600); auto-started on demand by client; shuts down on idle timeout / explicit `shutdown`; refuses second instance per socket path. Runs freeze pumps and watch sessions; translates ce_watch event lines → NDJSON notifications.
+2. **`comfyd` (daemon, `src/cli/daemon/`):** owns sessions; unix socket (default `$XDG_CACHE_HOME/comfyengine/comfy.sock`, mode 0600). **Lifecycle decision: manual start only** — user/agent runs `comfyd &` (or a service unit); `comfy` never spawns it and errors with code 1 + "daemon not running at <path>" hint when the socket is absent. Refuses second instance per socket path; stops via `comfy shutdown`. Runs freeze pumps and watch sessions; translates ce_watch event lines → NDJSON notifications.
 
 3. **`comfy` (client, `src/cli/client/`):** arg parsing, `--json`, exit codes; for stateless commands links core directly (no daemon round-trip); for session commands talks to the daemon. Also supports `exec -` batch mode.
 
@@ -263,7 +263,8 @@ Components:
 Conventions:
 - Addresses accept: hex `0x…`, decimal, `symbol+offset`, module names, and pointer-chain syntax `[base]+0x10]+4]`.
 - Types: `byte i16 i32 i64 float double aob string` (aliases match table labels).
-- Every command: `--json`, `--help`; destructive ones: `--yes`, `--dry-run`.
+- Every command: `--json`, `--help`.
+- **No confirmation gating**: all mutating commands execute immediately (operator/agent is trusted); `--dry-run` remains available as an opt-in preview on writers.
 
 ```
 # Discovery
@@ -279,7 +280,7 @@ comfy status [--sessions]
 
 # Read / write
 comfy read <addr-expr> <type>[@len]
-comfy write <addr-expr> <type> <value> [--yes|--dry-run]
+comfy write <addr-expr> <type> <value> [--dry-run]
 comfy hexdump <addr> <len>
 comfy disasm <addr> [-n COUNT]             # falls back to db-listing sans capstone
 
@@ -297,14 +298,14 @@ comfy watch rm <index>
 comfy watch set <index> <value>
 comfy watch freeze <index> on|off
 comfy watch list [--with-values]
-comfy table save <file> | load <file>
+comfy table save <file> [--offsets] | load <file> [--activate-scripts]
 
 # Patching / injection
-comfy patch <addr> <hexbytes> [--yes]      # via CodeInjector (auto-backup)
+comfy patch <addr> <hexbytes>      # via CodeInjector (auto-backup)
 comfy unpatch <addr>
 comfy patches                              # list live patches w/ originals
-comfy nop <addr> <len> [--yes]
-comfy aob replace <pattern> <hexbytes> [--limit N] [--verify] [--yes]
+comfy nop <addr> <len>
+comfy aob replace <pattern> <hexbytes> [--limit N] [--verify]
 comfy aa run <file> [--section enable|disable]
 comfy aa enable <name> | disable <name>    # saved/table scripts
 
@@ -332,7 +333,7 @@ $ comfy scan first --type i32 --mode exact --value 100
 {"count": 4211, "scanId": 1}
 $ comfy scan next --mode decreased --limit 5 --with-values --json
 [{"address":"0x55c0a1b2e140","value":87}, ...]
-$ comfy write 0x55c0a1b2e140 i32 9999 --yes
+$ comfy write 0x55c0a1b2e140 i32 9999
 $ comfy watch add '[baseNode]+0]+0]+0' i32 "secret via chain"
 ```
 
@@ -387,7 +388,7 @@ Rules: one JSON value per line; responses strictly ordered per connection but no
 Goal: zero behavior change; GUI keeps compiling/working.
 1. Add `ScalarCodec`, `resolvePointerChain`, `CheatTable` (data+pump, no JSON yet), `AutoAssembler`, `Analysis`, `Disassembler`; move `PointerScanner` to core.
 2. Rewire GUI call sites listed in §3 to the new services; delete duplicated switch blocks; delete hidden-AA-dialog hack (MainWindow.cpp:3017–3050); unify viewer patch backups onto CodeInjector.
-3. Decide JSON strategy (hand-rolled vs vendored nlohmann) and implement table serialization in core (keep byte-compatible format; add optional `offsets` field; fix ignored-`active` quirk only behind an opt-in flag).
+3. Implement table serialization in core using vendored nlohmann (keep byte-compatible format; `offsets` field only written with opt-in flag; honor stored `active` on load only behind opt-in flag).
 Acceptance: ctest green; manual GUI smoke (scan→watch→freeze→table save/load→AA enable/disable) identical; no Qt includes under `src/core`.
 
 ### Phase 1 — CLI skeleton + stateless commands
@@ -396,7 +397,7 @@ Acceptance: ctest green; manual GUI smoke (scan→watch→freeze→table save/lo
 Acceptance: end-to-end against test_watch/testgame from a script using only `--json` + exit codes.
 
 ### Phase 2 — Daemon & session model
-1. `comfyd` + socket + lifecycle (auto-start, idle shutdown, 0600 perms, single-instance lock).
+1. `comfyd` + socket + lifecycle (**manual start**, 0600 perms, single-instance lock, `comfy shutdown`).
 2. TargetSession, ScanSession (server-side results, slicing, undo stack, cancel), CheatTable session w/ freeze pump, ValueMonitor streaming.
 3. Client subcommands: `scan *`, `watch *`, `table *`, `monitor`, `snapshot take|diff`, `meta`.
 Acceptance: freeze survives daemon-client disconnect; scan of 100k+ results sliced not serialized whole; Ctrl-C cancels scan cleanly (exit 8).
@@ -410,7 +411,7 @@ Acceptance: every README "What You Get" bullet has a CLI equivalent demonstrated
 ### Phase 4 — Agent ergonomics
 1. `comfy exec -` batch NDJSON mode; `comfy schema` full generation from dispatch table.
 2. Event subscriptions (`wp.hit`, `monitor.change`, `freeze.violation`).
-3. Safety polish: `--dry-run` on all writers, `--yes` gating, confirmation-free scripting mode documented.
+3. Ergonomics polish: `--dry-run` available on all writers (no mandatory gating — decision locked), stable-versioning policy for JSON output documented.
 Acceptance: an LLM given only `comfy schema --json` completes a scripted find-modify-freeze task unassisted (dogfood test).
 
 ### Phase 5 — Testing & docs
@@ -440,10 +441,14 @@ Acceptance: an LLM given only `comfy schema --json` completes a scripted find-mo
 | yama/ptrace failures confuse agents | Error code 4 always carries the yama hint string in `error.hint` |
 | Format drift between GUI/CLI tables | Single serializer in core used by both frontends; golden-file tests |
 
-## 12. Open Questions
+## 12. Decisions (locked)
 
-1. Binary names: `comfy` + `comfyd`? (alternatives: `ce-cli`, subcommand `comfyengine cli`)
-2. JSON dependency: hand-rolled writer/parser vs vendored nlohmann single-header (P0 decision).
-3. Should the daemon eventually expose the same interface over TCP (containerized/remote targets)? Not now — design keeps transport swappable.
-4. Future MCP server wrapper around the same dispatch table — trivially additive once Phase 4 lands; out of scope for v1.
-5. Fix or preserve quirks: pointer-watch entries with empty offsets (2991–3004), ignored `active` on table load (2173–2180), viewer's unbacked double-click writes (599–621)? Recommendation: preserve defaults, expose fixes behind flags, revisit post-v1.
+| # | Question | Decision |
+|---|---|---|
+| 1 | Binary names | **`comfy`** (client) + **`comfyd`** (daemon), two executables |
+| 2 | JSON dependency | **Vendored nlohmann single-header** in `third_party/` |
+| 3 | Quirk policy | **Preserve GUI behavior by default; fixes behind opt-in flags** (`table save --offsets`, `table load --activate-scripts`) |
+| 4 | Confirmation gating | **None** — all writes execute immediately; `--dry-run` stays as optional preview |
+| 5 | Daemon lifecycle | **Manual start only** (`comfyd &`); client errors clearly when daemon absent; no auto-spawn, no idle timeout |
+
+Deferred (not blocking v1): TCP transport for remote/container targets (design keeps transport swappable); MCP server wrapper over the same dispatch table post-Phase-4.
