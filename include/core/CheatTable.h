@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -41,8 +42,9 @@ public:
     explicit CheatTable(TargetProcess &proc);
 
     void setEntries(std::vector<CheatEntry> entries);
-    const std::vector<CheatEntry> &entries() const { return entries_; }
-    std::vector<CheatEntry> &entries() { return entries_; }
+    std::vector<CheatEntry> snapshot() const;
+    void mutate(const std::function<void(std::vector<CheatEntry> &)> &fn);
+    size_t size() const;
 
     void enforceOnce();
 

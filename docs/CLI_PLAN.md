@@ -2,7 +2,7 @@
 
 **Feature:** full headless CLI (`comfy` + `comfyd`) exposing 100% of ComfyEngine's features so AI agents (and scripts) can drive the entire toolchain: process attach, memory scanning, watchlist/freeze, patching, Auto Assembler, AoB injection, pointer scanning, debug watchpoints, disassembly, and cheat tables.
 
-**Status:** plan / not started
+**Status:** Phases 0-4 implemented; Phase 5 (docs/man-page polish) partially done — see docs/CLI.md and tests/cli_e2e.sh
 **Principle:** *one engine, two frontends.* All feature logic lives in `src/core`; GUI and CLI are thin views over it.
 
 ---

@@ -235,8 +235,11 @@ std::optional<AutoAssembler::Script> AutoAssembler::parse(const std::string &scr
 
 bool AutoAssembler::apply(const CommandList &cmds) {
     for (const auto &cmd : cmds) {
-        if (cmd.type != Command::Type::Patch) continue;
-        injector_.patchBytes(cmd.address, cmd.bytes);
+        if (cmd.type == Command::Type::Patch) {
+            injector_.patchBytes(cmd.address, cmd.bytes);
+        } else if (cmd.type == Command::Type::Restore) {
+            injector_.restore(cmd.address);
+        }
     }
     return true;
 }

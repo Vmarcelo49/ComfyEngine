@@ -144,24 +144,22 @@ std::vector<std::pair<uint64_t, WatchHit>> DebugWatchSession::snapshot() const {
 }
 
 static std::string resolveCeWatchPath() {
-    // Try to locate ce_watch next to the built binaries:
-    //   <build>/src/comfyengine
-    //   <build>/ce_watch/ce_watch
+    // Try to locate ce_watch in a sibling ce_watch/ directory of any
+    // ancestor of the executable's directory, e.g.:
+    //   <build>/src/cli/comfyd  ->  <build>/ce_watch/ce_watch
     char exeBuf[PATH_MAX];
     ssize_t n = ::readlink("/proc/self/exe", exeBuf, sizeof(exeBuf) - 1);
     if (n > 0) {
         exeBuf[n] = '\0';
         std::string exePath(exeBuf);
-        auto slash = exePath.find_last_of('/');
-        if (slash != std::string::npos) {
-            std::string srcDir = exePath.substr(0, slash); // .../build/src
-            auto slash2 = srcDir.find_last_of('/');
-            if (slash2 != std::string::npos) {
-                std::string buildDir = srcDir.substr(0, slash2); // .../build
-                std::string candidate = buildDir + "/ce_watch/ce_watch";
-                if (::access(candidate.c_str(), X_OK) == 0) {
-                    return candidate;
-                }
+        std::string dir = exePath;
+        for (int depth = 0; depth < 6; ++depth) {
+            auto slash = dir.find_last_of('/');
+            if (slash == std::string::npos) break;
+            dir = dir.substr(0, slash);
+            std::string candidate = dir + "/ce_watch/ce_watch";
+            if (::access(candidate.c_str(), X_OK) == 0) {
+                return candidate;
             }
         }
     }

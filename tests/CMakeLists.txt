@@ -16,3 +16,9 @@ set_target_properties(ce_core_tests PROPERTIES
 add_test(NAME ce_core_tests
     COMMAND ce_core_tests $<TARGET_FILE:test_target_child>
 )
+
+add_test(NAME cli_e2e
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli_e2e.sh
+)
+
+set_tests_properties(cli_e2e PROPERTIES SKIP_RETURN_CODE 77)

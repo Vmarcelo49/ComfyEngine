@@ -45,6 +45,21 @@ void CheatTable::setEntries(std::vector<CheatEntry> entries) {
     entries_ = std::move(entries);
 }
 
+std::vector<CheatEntry> CheatTable::snapshot() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return entries_;
+}
+
+void CheatTable::mutate(const std::function<void(std::vector<CheatEntry> &)> &fn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fn(entries_);
+}
+
+size_t CheatTable::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return entries_.size();
+}
+
 void CheatTable::enforceOnce() {
     std::vector<CheatEntry> snapshot;
     {

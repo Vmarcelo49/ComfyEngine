@@ -72,3 +72,8 @@ add_executable(comfyengine ${GUI_SRC} ${GUI_HDR})
 target_link_libraries(comfyengine PRIVATE ce_core Qt6::Widgets)
 
 target_compile_definitions(comfyengine PRIVATE _GNU_SOURCE)
+
+option(CE_BUILD_CLI "Build comfy CLI and comfyd daemon" ON)
+if(CE_BUILD_CLI)
+    add_subdirectory(cli)
+endif()
